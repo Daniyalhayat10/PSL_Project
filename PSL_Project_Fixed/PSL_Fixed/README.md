@@ -260,4 +260,4 @@ If the TFLite model file is not found in assets, the app runs in **demo mode** w
 
 ---
 
-*Built with ❤️ for the Pakistani deaf community*
+*Built with ❤️ by Daniyal Hayat for the Pakistani deaf community*
