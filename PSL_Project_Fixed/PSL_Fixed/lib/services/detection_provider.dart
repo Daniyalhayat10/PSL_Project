@@ -75,7 +75,7 @@ class DetectionProvider extends ChangeNotifier {
   void undoLastLetter() {
     if (_detectedWord.isNotEmpty) {
       // Remove last Urdu character (may be multi-byte)
-      final chars = _detectedWord.characters;
+      final chars = UrduChars(_detectedWord);
       _detectedWord = chars.take(chars.length - 1).toString();
       notifyListeners();
     }
@@ -96,13 +96,13 @@ class DetectionProvider extends ChangeNotifier {
   }
 }
 
-extension on String {
-  Characters get characters => Characters(this);
+extension UrduStringExt on String {
+  UrduChars get urduChars => UrduChars(this);
 }
 
-class Characters {
+class UrduChars {
   final String _str;
-  Characters(this._str);
+  UrduChars(this._str);
 
   int get length {
     int count = 0;
@@ -112,10 +112,10 @@ class Characters {
     return count;
   }
 
-  Characters take(int n) {
+  UrduChars take(int n) {
     final runes = _str.runes.toList();
     final taken = runes.take(n).toList();
-    return Characters(String.fromCharCodes(taken));
+    return UrduChars(String.fromCharCodes(taken));
   }
 
   @override
