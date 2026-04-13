@@ -1,0 +1,38 @@
+name: psl_urdu_detector
+description: Pakistan Sign Language Urdu Detector
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  camera: ^0.10.5+9
+  tflite_flutter: ^0.10.4
+  permission_handler: ^11.3.1
+  flutter_animate: ^4.5.0
+  google_fonts: ^6.2.1
+  flutter_tts: ^4.0.2
+  path_provider: ^2.1.3
+  provider: ^6.1.2
+  image: ^4.1.7
+  google_mlkit_commons: ^0.9.0
+  google_mlkit_pose_detection: ^0.12.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
+    - assets/fonts/
+    - assets/models/
+  fonts:
+    - family: JameelNooriNastaleeq
+      fonts:
+        - asset: assets/fonts/JameelNooriNastaleeq.ttf
