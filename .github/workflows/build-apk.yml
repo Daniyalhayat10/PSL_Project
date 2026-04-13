@@ -32,14 +32,16 @@ jobs:
         run: yes | flutter doctor --android-licenses || true
 
       - name: Get dependencies
+        working-directory: PSL_Project_Fixed/PSL_Fixed
         run: flutter pub get
 
       - name: Build APK
+        working-directory: PSL_Project_Fixed/PSL_Fixed
         run: flutter build apk --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v3
         with:
           name: PSL-Release-APK
-          path: build/app/outputs/flutter-apk/app-release.apk
+          path: PSL_Project_Fixed/PSL_Fixed/build/app/outputs/flutter-apk/app-release.apk
           retention-days: 30
