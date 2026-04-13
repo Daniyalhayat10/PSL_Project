@@ -264,7 +264,7 @@ class _DetectionScreenState extends State<DetectionScreen>
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.camera_off, color: Colors.white38, size: 64),
+              const Icon(Icons.videocam_off, color: Colors.white38, size: 64),
               const SizedBox(height: 16),
               const Text('کیمرہ اجازت درکار ہے',
                 style: TextStyle(fontFamily: 'JameelNooriNastaleeq',
