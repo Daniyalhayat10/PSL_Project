@@ -31,6 +31,9 @@ jobs:
       - name: Accept Android licenses
         run: yes | flutter doctor --android-licenses || true
 
+      - name: Show repo structure
+        run: find . -name "pubspec.yaml" | head -5
+
       - name: Get dependencies
         working-directory: PSL_Project_Fixed/PSL_Fixed
         run: flutter pub get
