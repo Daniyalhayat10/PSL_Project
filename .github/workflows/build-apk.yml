@@ -31,6 +31,18 @@ jobs:
       - name: Accept Android licenses
         run: yes | flutter doctor --android-licenses || true
 
+      - name: Fix build.gradle.kts
+        working-directory: PSL_Project_Fixed/PSL_Fixed
+        run: |
+          sed -i 's/versionCode = flutter.versionCode$/versionCode = flutter.versionCode()/' android/app/build.gradle.kts
+          sed -i 's/versionName = flutter.versionName$/versionName = flutter.versionName()/' android/app/build.gradle.kts
+          sed -i 's/versionCode = flutter.versionCode$/versionCode = flutter.versionCode()/' android/build.gradle.kts
+          sed -i 's/versionName = flutter.versionName$/versionName = flutter.versionName()/' android/build.gradle.kts
+          echo "=== app/build.gradle.kts ==="
+          cat android/app/build.gradle.kts
+          echo "=== android/build.gradle.kts ==="
+          cat android/build.gradle.kts
+
       - name: Get dependencies
         working-directory: PSL_Project_Fixed/PSL_Fixed
         run: flutter pub get
