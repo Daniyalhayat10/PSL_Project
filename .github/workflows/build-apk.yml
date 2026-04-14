@@ -44,16 +44,19 @@ jobs:
         run: flutter pub get
 
       - name: Fix tflite namespace
-        working-directory: PSL_Project_Fixed/PSL_Fixed
         run: |
-          TFLITE_DIR=$(find $HOME/.pub-cache -path "*/tflite_flutter*/android" -type d | head -1)
+          TFLITE_DIR=$(find $HOME/.pub-cache -path "*/tflite_flutter*" -name "build.gradle" | head -1)
           if [ -n "$TFLITE_DIR" ]; then
-            BUILD_FILE="$TFLITE_DIR/build.gradle"
-            if [ -f "$BUILD_FILE" ]; then
-              if ! grep -q "namespace" "$BUILD_FILE"; then
-                sed -i '/^android {/a\    namespace "com.tfliteflutter.tflite_flutter"' "$BUILD_FILE"
-                echo "Added namespace to tflite_flutter"
-              fi
+            echo "Found: $TFLITE_DIR"
+            if ! grep -q "^namespace" "$TFLITE_DIR" && ! grep -q "namespace " "$TFLITE_DIR"; then
+              sed -i '/^android {/a\    namespace "org.tensorflow.tflite_flutter"' "$TFLITE_DIR"
+              echo "Added namespace"
+            fi
+            # Remove package from AndroidManifest
+            MANIFEST=$(find $HOME/.pub-cache -path "*/tflite_flutter*/AndroidManifest.xml" | head -1)
+            if [ -n "$MANIFEST" ]; then
+              sed -i 's/package="org.tensorflow.tflite_flutter"//' "$MANIFEST"
+              echo "Fixed AndroidManifest"
             fi
           fi
 
