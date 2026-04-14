@@ -38,14 +38,24 @@ jobs:
           sed -i 's/versionName = flutter.versionName$/versionName = flutter.versionName()/' android/app/build.gradle.kts
           sed -i 's/versionCode = flutter.versionCode$/versionCode = flutter.versionCode()/' android/build.gradle.kts
           sed -i 's/versionName = flutter.versionName$/versionName = flutter.versionName()/' android/build.gradle.kts
-          echo "=== app/build.gradle.kts ==="
-          cat android/app/build.gradle.kts
-          echo "=== android/build.gradle.kts ==="
-          cat android/build.gradle.kts
 
       - name: Get dependencies
         working-directory: PSL_Project_Fixed/PSL_Fixed
         run: flutter pub get
+
+      - name: Fix tflite namespace
+        working-directory: PSL_Project_Fixed/PSL_Fixed
+        run: |
+          TFLITE_DIR=$(find $HOME/.pub-cache -path "*/tflite_flutter*/android" -type d | head -1)
+          if [ -n "$TFLITE_DIR" ]; then
+            BUILD_FILE="$TFLITE_DIR/build.gradle"
+            if [ -f "$BUILD_FILE" ]; then
+              if ! grep -q "namespace" "$BUILD_FILE"; then
+                sed -i '/^android {/a\    namespace "com.tfliteflutter.tflite_flutter"' "$BUILD_FILE"
+                echo "Added namespace to tflite_flutter"
+              fi
+            fi
+          fi
 
       - name: Build APK
         working-directory: PSL_Project_Fixed/PSL_Fixed
