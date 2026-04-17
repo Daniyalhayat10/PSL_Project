@@ -74,7 +74,7 @@ class AboutScreen extends StatelessWidget {
         ),
         const SizedBox(height: 4),
         const Text(
-          'Final Year Project 2025',
+          'Final Year Project 2026',
           style: TextStyle(color: Color(0xFFC8A951), fontSize: 14),
         ),
       ],
