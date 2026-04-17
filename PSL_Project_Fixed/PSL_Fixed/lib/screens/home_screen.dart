@@ -34,9 +34,20 @@ class HomeScreen extends StatelessWidget {
                 const SizedBox(height: 24),
                 _buildFeatureGrid(context),
                 const SizedBox(height: 24),
-                _buildInfoCard(),
+              _buildInfoCard(),
                 const SizedBox(height: 16),
-              ],
+                const Center(
+                  child: Text(
+                    'Designed by Mehnail Jawad',
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Colors.white24,
+                      letterSpacing: 1.5,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
             ),
           ),
         ),
