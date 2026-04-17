@@ -120,16 +120,25 @@ class _SplashScreenState extends State<SplashScreen>
                     fontWeight: FontWeight.w300,
                   ),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  'FYP Project 2025',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors.white38,
-                    letterSpacing: 2,
-                  ),
-                ),
-                const SizedBox(height: 60),
+               const Text(
+  'FYP Project 2026',
+  style: TextStyle(
+    fontSize: 12,
+    color: Colors.white38,
+    letterSpacing: 2,
+  ),
+),
+const SizedBox(height: 6),
+const Text(
+  'Designed by Mehnail Jawad',
+  style: TextStyle(
+    fontSize: 11,
+    color: Colors.white38,
+    letterSpacing: 1.5,
+    fontStyle: FontStyle.italic,
+  ),
+),
+const SizedBox(height: 60),
                 SizedBox(
                   width: 200,
                   child: LinearProgressIndicator(
