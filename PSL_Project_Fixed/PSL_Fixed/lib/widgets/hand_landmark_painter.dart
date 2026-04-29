@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-/// Data model for a single hand landmark point
 class HandLandmark {
   final double x;
   final double y;
@@ -15,111 +14,108 @@ class HandLandmark {
   });
 }
 
-/// Custom painter that draws hand landmarks and connections over the camera feed
 class HandLandmarkPainter extends CustomPainter {
   final List<HandLandmark> landmarks;
   final Size imageSize;
   final bool isFrontCamera;
 
-  HandLandmarkPainter({
+  const HandLandmarkPainter({
     required this.landmarks,
     required this.imageSize,
     this.isFrontCamera = true,
   });
 
-  // MediaPipe hand connections
+  // Hand skeleton connections (MediaPipe standard)
   static const List<List<int>> connections = [
-    [0, 1], [1, 2], [2, 3], [3, 4],       // Thumb
-    [0, 5], [5, 6], [6, 7], [7, 8],       // Index
-    [0, 9], [9, 10], [10, 11], [11, 12],  // Middle
-    [0, 13], [13, 14], [14, 15], [15, 16], // Ring
-    [0, 17], [17, 18], [18, 19], [19, 20], // Pinky
-    [5, 9], [9, 13], [13, 17],             // Palm
+    // Thumb
+    [0, 1], [1, 2], [2, 3], [3, 4],
+    // Index
+    [0, 5], [5, 6], [6, 7], [7, 8],
+    // Middle
+    [0, 9], [9, 10], [10, 11], [11, 12],
+    // Ring
+    [0, 13], [13, 14], [14, 15], [15, 16],
+    // Pinky
+    [0, 17], [17, 18], [18, 19], [19, 20],
+    // Palm
+    [5, 9], [9, 13], [13, 17],
   ];
 
-  static const Map<int, Color> fingerColors = {
-    0: Color(0xFFFFD600), // Wrist - gold
-    1: Color(0xFFFF6B35), // Thumb - orange
-    2: Color(0xFFFF6B35),
-    3: Color(0xFFFF6B35),
-    4: Color(0xFFFF6B35),
-    5: Color(0xFF00E5FF), // Index - cyan
-    6: Color(0xFF00E5FF),
-    7: Color(0xFF00E5FF),
-    8: Color(0xFF00E5FF),
-    9: Color(0xFF69FF47), // Middle - green
-    10: Color(0xFF69FF47),
-    11: Color(0xFF69FF47),
-    12: Color(0xFF69FF47),
-    13: Color(0xFFFF4081), // Ring - pink
-    14: Color(0xFFFF4081),
-    15: Color(0xFFFF4081),
-    16: Color(0xFFFF4081),
-    17: Color(0xFFAA00FF), // Pinky - purple
-    18: Color(0xFFAA00FF),
-    19: Color(0xFFAA00FF),
-    20: Color(0xFFAA00FF),
-  };
+  // Fingertip indices for special highlighting
+  static const List<int> fingertips = [4, 8, 12, 16, 20];
+  // Knuckle indices
+  static const List<int> knuckles = [3, 7, 11, 15, 19];
 
   @override
   void paint(Canvas canvas, Size size) {
     if (landmarks.isEmpty) return;
 
-    final scaleX = size.width / imageSize.width;
-    final scaleY = size.height / imageSize.height;
-
-    Offset toScreen(HandLandmark lm) {
-      double x = lm.x * imageSize.width * scaleX;
-      double y = lm.y * imageSize.height * scaleY;
-      if (isFrontCamera) x = size.width - x; // Mirror for front cam
-      return Offset(x, y);
-    }
-
-    // Draw connections
     final linePaint = Paint()
-      ..color = Colors.white.withOpacity(0.6)
+      ..color = const Color(0xFF00FF88).withOpacity(0.85)
       ..strokeWidth = 2.5
-      ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round;
 
+    final dotPaint = Paint()
+      ..color = const Color(0xFF00FF88)
+      ..style = PaintingStyle.fill;
+
+    final tipPaint = Paint()
+      ..color = const Color(0xFFFFD600)
+      ..style = PaintingStyle.fill;
+
+    final wristPaint = Paint()
+      ..color = const Color(0xFF00BFFF)
+      ..style = PaintingStyle.fill;
+
+    // Map normalised [0,1] coordinates → canvas pixels
+    Offset toOffset(HandLandmark lm) {
+      double x = lm.x;
+      // Mirror X for front camera
+      if (isFrontCamera) x = 1.0 - x;
+      return Offset(x * size.width, lm.y * size.height);
+    }
+
+    final offsets = {for (final lm in landmarks) lm.index: toOffset(lm)};
+
+    // Draw skeleton lines
     for (final conn in connections) {
-      if (conn[0] < landmarks.length && conn[1] < landmarks.length) {
-        canvas.drawLine(
-          toScreen(landmarks[conn[0]]),
-          toScreen(landmarks[conn[1]]),
-          linePaint,
-        );
+      final a = offsets[conn[0]];
+      final b = offsets[conn[1]];
+      if (a != null && b != null) {
+        canvas.drawLine(a, b, linePaint);
       }
     }
 
     // Draw landmark dots
     for (final lm in landmarks) {
-      final pos = toScreen(lm);
-      final color = fingerColors[lm.index] ?? Colors.white;
-      final isFingerTip = [4, 8, 12, 16, 20].contains(lm.index);
+      final offset = offsets[lm.index];
+      if (offset == null) continue;
 
-      // Glow effect
-      final glowPaint = Paint()
-        ..color = color.withOpacity(0.3)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 8);
-      canvas.drawCircle(pos, isFingerTip ? 10 : 7, glowPaint);
-
-      // Dot
-      final dotPaint = Paint()
-        ..color = color
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(pos, isFingerTip ? 6 : 4, dotPaint);
-
-      // White border
-      final borderPaint = Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.5;
-      canvas.drawCircle(pos, isFingerTip ? 6 : 4, borderPaint);
+      if (lm.index == 0) {
+        // Wrist — blue larger dot
+        canvas.drawCircle(offset, 7, wristPaint);
+        canvas.drawCircle(offset, 7,
+            Paint()
+              ..color = Colors.white.withOpacity(0.5)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.5);
+      } else if (fingertips.contains(lm.index)) {
+        // Fingertips — yellow
+        canvas.drawCircle(offset, 6, tipPaint);
+        canvas.drawCircle(offset, 6,
+            Paint()
+              ..color = Colors.white.withOpacity(0.6)
+              ..style = PaintingStyle.stroke
+              ..strokeWidth = 1.2);
+      } else {
+        // Regular joints — green
+        canvas.drawCircle(offset, 4, dotPaint);
+      }
     }
   }
 
   @override
   bool shouldRepaint(HandLandmarkPainter oldDelegate) =>
-      oldDelegate.landmarks != landmarks;
+      oldDelegate.landmarks != landmarks ||
+      oldDelegate.isFrontCamera != isFrontCamera;
 }
