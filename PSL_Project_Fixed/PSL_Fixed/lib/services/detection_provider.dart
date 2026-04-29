@@ -9,7 +9,14 @@ class DetectionProvider extends ChangeNotifier {
   String _detectedWord = '';
   String _detectedSentence = '';
   int _detectionCount = 0;
-  DateTime? _lastDetectionTime;
+  DateTime? _lastLetterAddedTime;
+
+  // Minimum milliseconds between adding the SAME letter again
+  static const int _sameLetterCooldownMs = 1500;
+  // Minimum consecutive stable detections before confirming a letter
+  static const int _stableFramesRequired = 4;
+  // Minimum confidence to add to word
+  static const double _minConfidenceToAdd = 0.65;
 
   DetectionResult? get lastResult => _lastResult;
   List<DetectionResult> get recentHistory => _recentHistory;
@@ -18,6 +25,8 @@ class DetectionProvider extends ChangeNotifier {
   String get detectedWord => _detectedWord;
   String get detectedSentence => _detectedSentence;
   int get detectionCount => _detectionCount;
+  String get fullText =>
+      _detectedSentence.isEmpty ? _detectedWord : '$_detectedSentence$_detectedWord';
 
   void setDetecting(bool value) {
     _isDetecting = value;
@@ -30,37 +39,60 @@ class DetectionProvider extends ChangeNotifier {
   }
 
   void updateDetection(DetectionResult result) {
-    final now = DateTime.now();
+    _lastResult = result;
+    _detectionCount++;
 
-    // Debounce: only update if confidence high enough or 500ms passed
-    if (_lastResult?.urduLabel == result.urduLabel &&
-        _lastDetectionTime != null &&
-        now.difference(_lastDetectionTime!).inMilliseconds < 500) {
+    // Keep rolling history of last 15
+    _recentHistory.insert(0, result);
+    if (_recentHistory.length > 15) {
+      _recentHistory = _recentHistory.sublist(0, 15);
+    }
+
+    // Only attempt to add a letter if confidence is high enough
+    if (!result.isHighConfidence) {
+      notifyListeners();
       return;
     }
 
-    _lastResult = result;
-    _lastDetectionTime = now;
-    _detectionCount++;
+    // Check for stable detection: last N frames all predict same label
+    if (_recentHistory.length >= _stableFramesRequired) {
+      final recent = _recentHistory.sublist(0, _stableFramesRequired);
+      final allSame = recent.every((r) => r.urduLabel == result.urduLabel);
 
-    // Keep rolling history of last 10
-    _recentHistory.insert(0, result);
-    if (_recentHistory.length > 10) {
-      _recentHistory = _recentHistory.sublist(0, 10);
-    }
-
-    // Stable detection: if same letter 3 times in a row, add to word
-    if (_recentHistory.length >= 3) {
-      final last3 = _recentHistory.sublist(0, 3);
-      if (last3.every((r) => r.urduLabel == result.urduLabel) &&
-          result.isHighConfidence) {
-        if (_detectedWord.isEmpty ||
-            _detectedWord[_detectedWord.length - 1] != result.urduLabel[0]) {
-          _detectedWord += result.urduLabel;
-        }
+      if (allSame) {
+        _tryAddLetter(result.urduLabel);
       }
     }
 
+    notifyListeners();
+  }
+
+  void _tryAddLetter(String letter) {
+    final now = DateTime.now();
+
+    // Cooldown: don't add same letter twice within cooldown period
+    if (_lastLetterAddedTime != null) {
+      final elapsed = now.difference(_lastLetterAddedTime!).inMilliseconds;
+
+      // If same letter, apply cooldown
+      if (_detectedWord.isNotEmpty) {
+        final lastChar = _urduLastChar(_detectedWord);
+        if (lastChar == letter && elapsed < _sameLetterCooldownMs) {
+          return;
+        }
+      } else if (elapsed < _sameLetterCooldownMs ~/ 2) {
+        return; // general small cooldown even for new letters
+      }
+    }
+
+    _detectedWord += letter;
+    _lastLetterAddedTime = now;
+    debugPrint('✅ Letter added: $letter | Word: $_detectedWord');
+  }
+
+  /// Manually add a specific letter (for future manual input feature)
+  void addLetter(String letter) {
+    _detectedWord += letter;
     notifyListeners();
   }
 
@@ -68,15 +100,26 @@ class DetectionProvider extends ChangeNotifier {
     if (_detectedWord.isNotEmpty) {
       _detectedSentence += '$_detectedWord ';
       _detectedWord = '';
+      _lastLetterAddedTime = null;
       notifyListeners();
     }
   }
 
   void undoLastLetter() {
     if (_detectedWord.isNotEmpty) {
-      // Remove last Urdu character (may be multi-byte)
-      final chars = UrduChars(_detectedWord);
-      _detectedWord = chars.take(chars.length - 1).toString();
+      _detectedWord = _urduRemoveLast(_detectedWord);
+      notifyListeners();
+    } else if (_detectedSentence.isNotEmpty) {
+      // Remove last word from sentence
+      final trimmed = _detectedSentence.trimRight();
+      final lastSpace = trimmed.lastIndexOf(' ');
+      if (lastSpace >= 0) {
+        _detectedWord = trimmed.substring(lastSpace + 1);
+        _detectedSentence = trimmed.substring(0, lastSpace + 1);
+      } else {
+        _detectedWord = trimmed;
+        _detectedSentence = '';
+      }
       notifyListeners();
     }
   }
@@ -87,37 +130,30 @@ class DetectionProvider extends ChangeNotifier {
     _recentHistory.clear();
     _lastResult = null;
     _detectionCount = 0;
+    _lastLetterAddedTime = null;
     notifyListeners();
   }
 
   void clearWord() {
     _detectedWord = '';
+    _lastLetterAddedTime = null;
     notifyListeners();
   }
-}
 
-extension UrduStringExt on String {
-  UrduChars get urduChars => UrduChars(this);
-}
+  // ─── Urdu string helpers ───────────────────────────────────────────────────
 
-class UrduChars {
-  final String _str;
-  UrduChars(this._str);
-
-  int get length {
-    int count = 0;
-    for (final _ in _str.runes) {
-      count++;
-    }
-    return count;
+  /// Remove last Urdu grapheme cluster from string
+  String _urduRemoveLast(String s) {
+    if (s.isEmpty) return s;
+    final runes = s.runes.toList();
+    if (runes.isEmpty) return '';
+    return String.fromCharCodes(runes.take(runes.length - 1));
   }
 
-  UrduChars take(int n) {
-    final runes = _str.runes.toList();
-    final taken = runes.take(n).toList();
-    return UrduChars(String.fromCharCodes(taken));
+  /// Get last Urdu character from string
+  String _urduLastChar(String s) {
+    if (s.isEmpty) return '';
+    final runes = s.runes.toList();
+    return String.fromCharCode(runes.last);
   }
-
-  @override
-  String toString() => _str;
 }
