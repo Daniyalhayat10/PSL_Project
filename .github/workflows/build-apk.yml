@@ -1,36 +1,29 @@
 name: Build PSL APK
-
 on:
   push:
     branches:
       - main
       - master
   workflow_dispatch:
-
 jobs:
   build:
     name: Build Release APK
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.22.3'
           channel: 'stable'
-
       - name: Accept Android licenses
         run: yes | flutter doctor --android-licenses || true
-
       - name: Fix build.gradle.kts
         working-directory: PSL_Project_Fixed/PSL_Fixed
         run: |
@@ -38,13 +31,9 @@ jobs:
           sed -i 's/versionName = flutter.versionName$/versionName = flutter.versionName()/' android/app/build.gradle.kts
           sed -i 's/versionCode = flutter.versionCode$/versionCode = flutter.versionCode()/' android/build.gradle.kts
           sed -i 's/versionName = flutter.versionName$/versionName = flutter.versionName()/' android/build.gradle.kts
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/' android/app/build.gradle.kts
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/' android/build.gradle.kts
-
       - name: Get dependencies
         working-directory: PSL_Project_Fixed/PSL_Fixed
         run: flutter pub get
-
       - name: Fix tflite namespace
         run: |
           TFLITE_DIR=$(find $HOME/.pub-cache -path "*/tflite_flutter*" -name "build.gradle" | head -1)
@@ -57,11 +46,9 @@ jobs:
               sed -i 's/package="org.tensorflow.tflite_flutter"//' "$MANIFEST"
             fi
           fi
-
       - name: Build APK
         working-directory: PSL_Project_Fixed/PSL_Fixed
         run: flutter build apk --release
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
