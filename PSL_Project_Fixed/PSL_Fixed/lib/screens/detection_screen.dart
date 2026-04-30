@@ -1,16 +1,14 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:google_mlkit_hand_landmark/google_mlkit_hand_landmark.dart';
+import 'package:image/image.dart' as img;
 
 import '../services/model_service.dart';
 import '../services/detection_provider.dart';
-import '../widgets/hand_landmark_painter.dart';
 
 class DetectionScreen extends StatefulWidget {
   const DetectionScreen({super.key});
@@ -21,40 +19,33 @@ class DetectionScreen extends StatefulWidget {
 
 class _DetectionScreenState extends State<DetectionScreen>
     with WidgetsBindingObserver {
-  // ─── Camera ───────────────────────────────────────────────────────────────
+  // Camera
   CameraController? _cameraController;
   List<CameraDescription> _cameras = [];
-  int _cameraIndex = 1; // front camera default
+  int _cameraIndex = 1;
   bool _cameraPermissionGranted = false;
   bool _isStreamActive = false;
 
-  // ─── ML Kit Hand Landmark ─────────────────────────────────────────────────
-  HandLandmarker? _handLandmarker;
+  // Frame processing
   bool _isProcessingFrame = false;
-  int _frameSkip = 0;
-  static const int _processEveryNFrames = 3; // process 1 in 3 frames
+  int _frameCounter = 0;
+  static const int _processEveryNFrames = 5;
 
-  // ─── TTS ──────────────────────────────────────────────────────────────────
+  // TTS
   FlutterTts? _tts;
   bool _ttsEnabled = true;
   String? _lastSpokenLabel;
 
-  // ─── UI state ─────────────────────────────────────────────────────────────
+  // UI
   bool _handDetected = false;
-  List<HandLandmark> _displayLandmarks = [];
   String _statusMessage = 'ہاتھ کیمرہ کے سامنے رکھیں';
-
-  // ─── Lifecycle ────────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initTTS();
-    _initHandLandmarker();
     _requestPermissionAndInit();
-
-    // Load model if not already loaded
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final model = context.read<ModelService>();
       if (!model.isLoaded) model.loadModel();
@@ -68,27 +59,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     await _tts?.setVolume(1.0);
   }
 
-  Future<void> _initHandLandmarker() async {
-    final options = HandLandmarkerOptions(
-      baseOptions: BaseOptions(modelAssetPath: 'assets/models/hand_landmarker.task'),
-      runningMode: RunningMode.liveStream,
-      numHands: 1,
-      minHandDetectionConfidence: 0.5,
-      minHandPresenceConfidence: 0.5,
-      minTrackingConfidence: 0.5,
-      resultListener: _onHandLandmarkResult,
-    );
-    try {
-      _handLandmarker = HandLandmarker.defaultOptions();
-      // Use live stream mode for real-time
-      _handLandmarker = HandLandmarker(options: options);
-      debugPrint('✅ HandLandmarker initialised');
-    } catch (e) {
-      debugPrint('❌ HandLandmarker init failed: $e');
-    }
-  }
-
-  // ─── Camera setup ─────────────────────────────────────────────────────────
+  // ── Camera ──────────────────────────────────────────────────────────────────
 
   Future<void> _requestPermissionAndInit() async {
     final status = await Permission.camera.request();
@@ -108,13 +79,12 @@ class _DetectionScreenState extends State<DetectionScreen>
     await _stopStream();
     await _cameraController?.dispose();
 
-    final camera = _cameras[index];
     _cameraController = CameraController(
-      camera,
-      ResolutionPreset.medium, // medium = faster stream processing
+      _cameras[index],
+      ResolutionPreset.medium,
       enableAudio: false,
       imageFormatGroup: Platform.isAndroid
-          ? ImageFormatGroup.nv21
+          ? ImageFormatGroup.yuv420
           : ImageFormatGroup.bgra8888,
     );
 
@@ -133,156 +103,123 @@ class _DetectionScreenState extends State<DetectionScreen>
     if (_cameraController == null ||
         !_cameraController!.value.isInitialized ||
         _isStreamActive) return;
-
     _isStreamActive = true;
     await _cameraController!.startImageStream(_onCameraFrame);
-    if (mounted) {
-      setState(() => _statusMessage = 'ہاتھ کیمرہ کے سامنے رکھیں');
-    }
   }
 
   Future<void> _stopStream() async {
     if (!_isStreamActive) return;
     _isStreamActive = false;
-    try {
-      await _cameraController?.stopImageStream();
-    } catch (_) {}
+    try { await _cameraController?.stopImageStream(); } catch (_) {}
   }
 
-  // ─── Real-time frame processing ───────────────────────────────────────────
+  // ── Frame processing ────────────────────────────────────────────────────────
 
-  void _onCameraFrame(CameraImage image) {
-    // Skip frames to avoid overloading
-    _frameSkip++;
-    if (_frameSkip % _processEveryNFrames != 0) return;
+  void _onCameraFrame(CameraImage cameraImage) {
+    _frameCounter++;
+    if (_frameCounter % _processEveryNFrames != 0) return;
     if (_isProcessingFrame) return;
-    if (_handLandmarker == null) return;
-
     _isProcessingFrame = true;
-    _processFrame(image);
+    _processFrameAsync(cameraImage);
   }
 
-  Future<void> _processFrame(CameraImage image) async {
+  Future<void> _processFrameAsync(CameraImage cameraImage) async {
     try {
-      final camera = _cameras[_cameraIndex];
-      final rotation = _rotationFromSensorOrientation(
-          camera.sensorOrientation, camera.lensDirection);
+      final imgFrame = _convertCameraImage(cameraImage);
+      if (imgFrame == null) return;
 
-      final inputImage = _buildInputImage(image, camera, rotation);
-      if (inputImage == null) {
-        _isProcessingFrame = false;
-        return;
+      final modelService = context.read<ModelService>();
+      final result = modelService.processFrame(imgFrame);
+
+      if (!mounted) return;
+
+      if (result != null) {
+        context.read<DetectionProvider>().updateDetection(result);
+        setState(() {
+          _handDetected = true;
+          _statusMessage =
+              '${result.romanLabel}  ${result.confidencePercent}';
+        });
+
+        if (_ttsEnabled &&
+            result.isHighConfidence &&
+            result.romanLabel != _lastSpokenLabel) {
+          _lastSpokenLabel = result.romanLabel;
+          _tts?.speak(result.urduLabel);
+        }
+      } else {
+        setState(() {
+          _handDetected = false;
+          _statusMessage = 'ہاتھ نہیں ملا — کیمرہ کے سامنے رکھیں';
+        });
       }
-
-      await _handLandmarker!.processImage(inputImage);
-      // Result comes via _onHandLandmarkResult callback
     } catch (e) {
-      debugPrint('❌ Frame process error: $e');
+      debugPrint('❌ processFrame error: $e');
     } finally {
       _isProcessingFrame = false;
     }
   }
 
-  void _onHandLandmarkResult(
-      HandLandmarkerResult result, InputImage inputImage, int timestamp) {
-    if (!mounted) return;
-
-    if (result.handLandmarks.isEmpty) {
-      setState(() {
-        _handDetected = false;
-        _displayLandmarks = [];
-        _statusMessage = 'ہاتھ نہیں ملا — کیمرہ کے سامنے رکھیں';
-      });
-      return;
-    }
-
-    // Get first hand's 21 landmarks
-    final hand = result.handLandmarks.first;
-    final rawLandmarks = hand.landmarks
-        .map((lm) => [lm.x, lm.y, lm.z])
-        .toList();
-
-    if (rawLandmarks.length != 21) {
-      _isProcessingFrame = false;
-      return;
-    }
-
-    // Normalise exactly as Python training code
-    final normalized = ModelService.normalizeLandmarks(rawLandmarks);
-    if (normalized.isEmpty) return;
-
-    // Run TFLite inference
-    final modelService = context.read<ModelService>();
-    final detResult = modelService.runInference(normalized);
-
-    if (detResult != null && mounted) {
-      context.read<DetectionProvider>().updateDetection(detResult);
-
-      // Build display landmarks
-      final displayLms = hand.landmarks
-          .asMap()
-          .entries
-          .map((e) => HandLandmark(
-                x: e.value.x,
-                y: e.value.y,
-                z: e.value.z,
-                index: e.key,
-              ))
-          .toList();
-
-      setState(() {
-        _handDetected = true;
-        _displayLandmarks = displayLms;
-        _statusMessage = '${detResult.romanLabel} — ${detResult.confidencePercent}';
-      });
-
-      // Speak high-confidence detections (don't repeat same letter)
-      if (_ttsEnabled &&
-          detResult.isHighConfidence &&
-          detResult.romanLabel != _lastSpokenLabel) {
-        _lastSpokenLabel = detResult.romanLabel;
-        _tts?.speak(detResult.urduLabel);
-      }
-    }
-  }
-
-  // ─── Helpers ──────────────────────────────────────────────────────────────
-
-  InputImage? _buildInputImage(
-      CameraImage image, CameraDescription camera, InputImageRotation rotation) {
+  /// Convert CameraImage (YUV420 or BGRA) to img.Image
+  img.Image? _convertCameraImage(CameraImage camImage) {
     try {
-      final format = Platform.isAndroid
-          ? InputImageFormat.nv21
-          : InputImageFormat.bgra8888;
-
-      final plane = image.planes.first;
-      return InputImage.fromBytes(
-        bytes: plane.bytes,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: rotation,
-          format: format,
-          bytesPerRow: plane.bytesPerRow,
-        ),
-      );
+      if (Platform.isAndroid) {
+        return _yuv420ToImage(camImage);
+      } else {
+        return _bgra8888ToImage(camImage);
+      }
     } catch (e) {
-      debugPrint('❌ InputImage build error: $e');
+      debugPrint('❌ Image convert error: $e');
       return null;
     }
   }
 
-  InputImageRotation _rotationFromSensorOrientation(
-      int sensorOrientation, CameraLensDirection lensDirection) {
-    var rotationCompensation = sensorOrientation;
-    if (lensDirection == CameraLensDirection.front) {
-      rotationCompensation = (360 - rotationCompensation) % 360;
+  img.Image _yuv420ToImage(CameraImage camImage) {
+    final int width = camImage.width;
+    final int height = camImage.height;
+    final image = img.Image(width: width, height: height);
+
+    final yPlane = camImage.planes[0];
+    final uPlane = camImage.planes[1];
+    final vPlane = camImage.planes[2];
+
+    final yBytes = yPlane.bytes;
+    final uBytes = uPlane.bytes;
+    final vBytes = vPlane.bytes;
+
+    final int uvRowStride = uPlane.bytesPerRow;
+    final int uvPixelStride = uPlane.bytesPerPixel!;
+
+    for (int y = 0; y < height; y++) {
+      for (int x = 0; x < width; x++) {
+        final int yIdx = y * yPlane.bytesPerRow + x;
+        final int uvIdx =
+            (y ~/ 2) * uvRowStride + (x ~/ 2) * uvPixelStride;
+
+        final int yVal = yBytes[yIdx];
+        final int uVal = uBytes[uvIdx];
+        final int vVal = vBytes[uvIdx];
+
+        int r = (yVal + 1.402 * (vVal - 128)).round().clamp(0, 255);
+        int g = (yVal - 0.344136 * (uVal - 128) - 0.714136 * (vVal - 128))
+            .round()
+            .clamp(0, 255);
+        int b = (yVal + 1.772 * (uVal - 128)).round().clamp(0, 255);
+
+        image.setPixelRgb(x, y, r, g, b);
+      }
     }
-    switch (rotationCompensation) {
-      case 90:  return InputImageRotation.rotation90deg;
-      case 180: return InputImageRotation.rotation180deg;
-      case 270: return InputImageRotation.rotation270deg;
-      default:  return InputImageRotation.rotation0deg;
-    }
+    return image;
+  }
+
+  img.Image _bgra8888ToImage(CameraImage camImage) {
+    return img.Image.fromBytes(
+      width: camImage.width,
+      height: camImage.height,
+      bytes: camImage.planes[0].bytes.buffer,
+      format: img.Format.uint8,
+      order: img.ChannelOrder.bgra,
+    );
   }
 
   Future<void> _switchCamera() async {
@@ -306,29 +243,58 @@ class _DetectionScreenState extends State<DetectionScreen>
     _stopStream();
     _cameraController?.dispose();
     _tts?.stop();
-    _handLandmarker?.close();
     super.dispose();
   }
 
-  // ─── UI ───────────────────────────────────────────────────────────────────
+  // ── UI ──────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Colors.black,
       body: SafeArea(
-        child: Stack(
-          children: [
-            _buildCameraView(),
-            if (_displayLandmarks.isNotEmpty) _buildLandmarkOverlay(),
-            _buildTopBar(),
-            _buildStatusBadge(),
-            Positioned(
-              bottom: 0, left: 0, right: 0,
-              child: _buildBottomPanel(),
-            ),
-          ],
+        child: Stack(children: [
+          _buildCameraView(),
+          _buildGuideBox(),
+          _buildTopBar(),
+          _buildStatusBadge(),
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: _buildBottomPanel(),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  /// Green guide box so user knows where to hold their hand
+  Widget _buildGuideBox() {
+    return Center(
+      child: Container(
+        width: 220,
+        height: 220,
+        decoration: BoxDecoration(
+          border: Border.all(
+            color: _handDetected
+                ? const Color(0xFF00C853)
+                : Colors.white38,
+            width: 2,
+          ),
+          borderRadius: BorderRadius.circular(16),
         ),
+        child: _handDetected
+            ? null
+            : const Center(
+                child: Text(
+                  'ہاتھ یہاں رکھیں',
+                  style: TextStyle(
+                    fontFamily: 'JameelNooriNastaleeq',
+                    color: Colors.white38,
+                    fontSize: 14,
+                  ),
+                  textDirection: TextDirection.rtl,
+                ),
+              ),
       ),
     );
   }
@@ -384,18 +350,6 @@ class _DetectionScreenState extends State<DetectionScreen>
     );
   }
 
-  Widget _buildLandmarkOverlay() {
-    final size = MediaQuery.of(context).size;
-    return CustomPaint(
-      size: size,
-      painter: HandLandmarkPainter(
-        landmarks: _displayLandmarks,
-        imageSize: size,
-        isFrontCamera: _cameraIndex == 1,
-      ),
-    );
-  }
-
   Widget _buildTopBar() {
     return Positioned(
       top: 0, left: 0, right: 0,
@@ -412,35 +366,31 @@ class _DetectionScreenState extends State<DetectionScreen>
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Row(children: [
-              _TopBarButton(
-                  icon: Icons.arrow_back_ios,
+              _TopBarBtn(icon: Icons.arrow_back_ios,
                   onTap: () => Navigator.pop(context)),
-              const SizedBox(width: 8),
-              if (_cameras.length > 1)
-                _TopBarButton(
-                    icon: Icons.flip_camera_ios, onTap: _switchCamera),
+              if (_cameras.length > 1) ...[
+                const SizedBox(width: 8),
+                _TopBarBtn(icon: Icons.flip_camera_ios, onTap: _switchCamera),
+              ],
             ]),
-            const Text(
-              'شناخت',
-              style: TextStyle(
-                  fontFamily: 'JameelNooriNastaleeq',
-                  color: Colors.white,
-                  fontSize: 20),
-              textDirection: TextDirection.rtl,
-            ),
+            const Text('شناخت',
+                style: TextStyle(
+                    fontFamily: 'JameelNooriNastaleeq',
+                    color: Colors.white,
+                    fontSize: 20),
+                textDirection: TextDirection.rtl),
             Row(children: [
-              _TopBarButton(
+              _TopBarBtn(
                 icon: _ttsEnabled ? Icons.volume_up : Icons.volume_off,
                 onTap: () => setState(() => _ttsEnabled = !_ttsEnabled),
                 active: _ttsEnabled,
               ),
               const SizedBox(width: 8),
-              _TopBarButton(
+              _TopBarBtn(
                 icon: Icons.delete_outline,
                 onTap: () {
                   context.read<DetectionProvider>().clearAll();
                   setState(() {
-                    _displayLandmarks = [];
                     _handDetected = false;
                     _statusMessage = 'ہاتھ کیمرہ کے سامنے رکھیں';
                   });
@@ -455,48 +405,33 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   Widget _buildStatusBadge() {
     return Positioned(
-      top: 80, left: 16, right: 16,
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        decoration: BoxDecoration(
-          color: _handDetected
-              ? const Color(0xFF00C853).withOpacity(0.25)
-              : Colors.black.withOpacity(0.55),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(
+      top: 70, left: 16, right: 16,
+      child: Center(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 300),
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          decoration: BoxDecoration(
             color: _handDetected
-                ? const Color(0xFF00C853).withOpacity(0.6)
-                : Colors.white24,
+                ? const Color(0xFF00C853).withOpacity(0.2)
+                : Colors.black.withOpacity(0.55),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: _handDetected
+                  ? const Color(0xFF00C853).withOpacity(0.6)
+                  : Colors.white24,
+            ),
           ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              _handDetected ? Icons.back_hand : Icons.pan_tool_outlined,
+          child: Text(
+            _statusMessage,
+            style: TextStyle(
+              fontFamily: 'JameelNooriNastaleeq',
               color: _handDetected
                   ? const Color(0xFF00C853)
-                  : Colors.white38,
-              size: 16,
+                  : Colors.white60,
+              fontSize: 13,
             ),
-            const SizedBox(width: 8),
-            Flexible(
-              child: Text(
-                _statusMessage,
-                style: TextStyle(
-                  fontFamily: 'JameelNooriNastaleeq',
-                  color: _handDetected
-                      ? const Color(0xFF00C853)
-                      : Colors.white60,
-                  fontSize: 12,
-                ),
-                textDirection: TextDirection.rtl,
-                textAlign: TextAlign.center,
-              ),
-            ),
-          ],
+            textDirection: TextDirection.rtl,
+          ),
         ),
       ),
     );
@@ -504,33 +439,31 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   Widget _buildBottomPanel() {
     return Consumer<DetectionProvider>(
-      builder: (context, provider, _) {
-        return Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.bottomCenter,
-              end: Alignment.topCenter,
-              colors: [
-                Colors.black.withOpacity(0.97),
-                Colors.black.withOpacity(0.75),
-                Colors.transparent,
-              ],
-            ),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (provider.lastResult != null)
-                _buildResultCard(provider.lastResult!),
-              const SizedBox(height: 8),
-              _buildWordDisplay(provider),
-              const SizedBox(height: 12),
-              _buildActionRow(provider),
-              const SizedBox(height: 16),
+      builder: (context, provider, _) => Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.bottomCenter,
+            end: Alignment.topCenter,
+            colors: [
+              Colors.black.withOpacity(0.97),
+              Colors.black.withOpacity(0.7),
+              Colors.transparent,
             ],
           ),
-        );
-      },
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (provider.lastResult != null)
+              _buildResultCard(provider.lastResult!),
+            const SizedBox(height: 8),
+            _buildWordDisplay(provider),
+            const SizedBox(height: 12),
+            _buildActionRow(provider),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
     );
   }
 
@@ -545,9 +478,7 @@ class _DetectionScreenState extends State<DetectionScreen>
               children: [
                 Text(result.romanLabel,
                     style: const TextStyle(
-                        color: Colors.white60,
-                        fontSize: 13,
-                        letterSpacing: 1)),
+                        color: Colors.white60, fontSize: 13, letterSpacing: 1)),
                 const SizedBox(height: 6),
                 ClipRRect(
                   borderRadius: BorderRadius.circular(4),
@@ -561,31 +492,27 @@ class _DetectionScreenState extends State<DetectionScreen>
                 const SizedBox(height: 3),
                 Text(
                   'Confidence: ${result.confidencePercent}',
-                  style: TextStyle(
-                      color: result.confidenceColor, fontSize: 11),
+                  style: TextStyle(color: result.confidenceColor, fontSize: 11),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 16),
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 200),
-            width: 90,
-            height: 90,
+          Container(
+            width: 88,
+            height: 88,
             decoration: BoxDecoration(
               gradient: LinearGradient(colors: [
                 const Color(0xFF006400).withOpacity(0.85),
-                const Color(0xFF00A300).withOpacity(0.65),
+                const Color(0xFF00A300).withOpacity(0.6),
               ]),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                  color: result.confidenceColor.withOpacity(0.6),
-                  width: 2),
+                  color: result.confidenceColor.withOpacity(0.6), width: 2),
               boxShadow: [
                 BoxShadow(
                     color: result.confidenceColor.withOpacity(0.3),
-                    blurRadius: 20,
-                    spreadRadius: 2),
+                    blurRadius: 20)
               ],
             ),
             child: Center(
@@ -616,18 +543,14 @@ class _DetectionScreenState extends State<DetectionScreen>
       ),
       child: Column(children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text(
-            'Detections: ${provider.detectionCount}',
-            style: const TextStyle(color: Colors.white38, fontSize: 10),
-          ),
-          const Text(
-            'شناخت شدہ',
-            style: TextStyle(
-                fontFamily: 'JameelNooriNastaleeq',
-                color: Color(0xFFC8A951),
-                fontSize: 13),
-            textDirection: TextDirection.rtl,
-          ),
+          Text('Frames: ${provider.detectionCount}',
+              style: const TextStyle(color: Colors.white38, fontSize: 10)),
+          const Text('شناخت شدہ',
+              style: TextStyle(
+                  fontFamily: 'JameelNooriNastaleeq',
+                  color: Color(0xFFC8A951),
+                  fontSize: 13),
+              textDirection: TextDirection.rtl),
         ]),
         const SizedBox(height: 8),
         Container(
@@ -653,109 +576,88 @@ class _DetectionScreenState extends State<DetectionScreen>
   Widget _buildActionRow(DetectionProvider provider) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
-        children: [
-          _ActionButton(
-            icon: Icons.space_bar,
-            label: 'Space',
+      child: Row(children: [
+        _ActionBtn(
+            icon: Icons.space_bar, label: 'Space',
             onTap: provider.addSpaceToWord,
-            color: const Color(0xFF1565C0),
-          ),
-          const SizedBox(width: 6),
-          _ActionButton(
-            icon: Icons.backspace_outlined,
-            label: 'Undo',
+            color: const Color(0xFF1565C0)),
+        const SizedBox(width: 6),
+        _ActionBtn(
+            icon: Icons.backspace_outlined, label: 'Undo',
             onTap: provider.undoLastLetter,
-            color: const Color(0xFF6A1B9A),
-          ),
-          const SizedBox(width: 6),
-          _ActionButton(
-            icon: Icons.volume_up,
-            label: 'Speak',
+            color: const Color(0xFF6A1B9A)),
+        const SizedBox(width: 6),
+        _ActionBtn(
+            icon: Icons.volume_up, label: 'Speak',
             onTap: () async {
-              final text = provider.fullText;
-              if (text.isNotEmpty) await _tts?.speak(text);
+              final t = provider.fullText;
+              if (t.isNotEmpty) await _tts?.speak(t);
             },
-            color: const Color(0xFF00695C),
-          ),
-          const SizedBox(width: 6),
-          _ActionButton(
-            icon: Icons.clear_all,
-            label: 'Clear',
+            color: const Color(0xFF00695C)),
+        const SizedBox(width: 6),
+        _ActionBtn(
+            icon: Icons.clear_all, label: 'Clear',
             onTap: () {
               provider.clearAll();
               setState(() {
                 _handDetected = false;
-                _displayLandmarks = [];
                 _statusMessage = 'ہاتھ کیمرہ کے سامنے رکھیں';
               });
             },
-            color: const Color(0xFFB71C1C),
-          ),
-        ],
-      ),
+            color: const Color(0xFFB71C1C)),
+      ]),
     );
   }
 }
 
-// ─── Reusable widgets ─────────────────────────────────────────────────────────
+// ── Small reusable widgets ────────────────────────────────────────────────────
 
-class _TopBarButton extends StatelessWidget {
+class _TopBarBtn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
   final bool active;
-  const _TopBarButton(
-      {required this.icon, required this.onTap, this.active = true});
+  const _TopBarBtn({required this.icon, required this.onTap, this.active = true});
 
   @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(10),
-        decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.5),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: Colors.white24),
+  Widget build(BuildContext context) => GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(10),
+          decoration: BoxDecoration(
+            color: Colors.black.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.white24),
+          ),
+          child: Icon(icon, color: active ? Colors.white : Colors.white38, size: 20),
         ),
-        child: Icon(icon,
-            color: active ? Colors.white : Colors.white38, size: 20),
-      ),
-    );
-  }
+      );
 }
 
-class _ActionButton extends StatelessWidget {
+class _ActionBtn extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
   final Color color;
-  const _ActionButton({
-    required this.icon,
-    required this.label,
-    required this.onTap,
-    required this.color,
-  });
+  const _ActionBtn({required this.icon, required this.label,
+      required this.onTap, required this.color});
 
   @override
-  Widget build(BuildContext context) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 10),
-          decoration: BoxDecoration(
-            color: color.withOpacity(0.2),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: color.withOpacity(0.4)),
+  Widget build(BuildContext context) => Expanded(
+        child: GestureDetector(
+          onTap: onTap,
+          child: Container(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: color.withOpacity(0.4)),
+            ),
+            child: Column(children: [
+              Icon(icon, color: color, size: 20),
+              const SizedBox(height: 3),
+              Text(label, style: TextStyle(color: color, fontSize: 10)),
+            ]),
           ),
-          child: Column(children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(height: 3),
-            Text(label, style: TextStyle(color: color, fontSize: 10)),
-          ]),
         ),
-      ),
-    );
-  }
+      );
 }
