@@ -12,43 +12,47 @@ import '../services/detection_provider.dart';
 
 class DetectionScreen extends StatefulWidget {
   const DetectionScreen({super.key});
-
   @override
   State<DetectionScreen> createState() => _DetectionScreenState();
 }
 
 class _DetectionScreenState extends State<DetectionScreen>
     with WidgetsBindingObserver {
-  // Camera
-  CameraController? _cameraController;
+
+  // ── Camera ─────────────────────────────────────────────────────────────────
+  CameraController? _cam;
   List<CameraDescription> _cameras = [];
-  int _cameraIndex = 1;
-  bool _cameraPermissionGranted = false;
-  bool _isStreamActive = false;
+  int _camIdx = 1; // front camera by default
+  bool _hasPermission = false;
+  bool _streamActive = false;
 
-  // Frame processing
-  bool _isProcessingFrame = false;
-  int _frameCounter = 0;
-  static const int _processEveryNFrames = 5;
+  // ── Frame processing ───────────────────────────────────────────────────────
+  bool _busy = false;
+  int _frameCount = 0;
+  // Process every 4th frame to keep UI smooth
+  static const int _skipFrames = 4;
 
-  // TTS
+  // ── TTS ────────────────────────────────────────────────────────────────────
   FlutterTts? _tts;
-  bool _ttsEnabled = true;
-  String? _lastSpokenLabel;
+  bool _ttsOn = true;
+  String? _lastSpoken;
 
-  // UI
-  bool _handDetected = false;
-  String _statusMessage = 'ہاتھ کیمرہ کے سامنے رکھیں';
+  // ── UI state ───────────────────────────────────────────────────────────────
+  bool _handFound = false;
+  String _status = 'ہاتھ کیمرہ کے سامنے رکھیں';
+  int _processedFrames = 0; // shown in debug counter
+
+  // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _initTTS();
-    _requestPermissionAndInit();
+    _requestAndInit();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final model = context.read<ModelService>();
-      if (!model.isLoaded) model.loadModel();
+      final m = context.read<ModelService>();
+      if (!m.isLoaded && !m.isLoading) m.loadModel();
     });
   }
 
@@ -59,29 +63,30 @@ class _DetectionScreenState extends State<DetectionScreen>
     await _tts?.setVolume(1.0);
   }
 
-  // ── Camera ──────────────────────────────────────────────────────────────────
+  // ── Camera setup ───────────────────────────────────────────────────────────
 
-  Future<void> _requestPermissionAndInit() async {
-    final status = await Permission.camera.request();
+  Future<void> _requestAndInit() async {
+    final s = await Permission.camera.request();
     if (!mounted) return;
-    setState(() => _cameraPermissionGranted = status.isGranted);
-    if (status.isGranted) await _initCamera();
+    setState(() => _hasPermission = s.isGranted);
+    if (s.isGranted) await _initCameras();
   }
 
-  Future<void> _initCamera() async {
+  Future<void> _initCameras() async {
     _cameras = await availableCameras();
     if (_cameras.isEmpty) return;
-    _cameraIndex = _cameras.length > 1 ? 1 : 0;
-    await _startCamera(_cameraIndex);
+    // prefer front camera (index 1), fall back to back (index 0)
+    _camIdx = _cameras.length > 1 ? 1 : 0;
+    await _startCamera(_camIdx);
   }
 
-  Future<void> _startCamera(int index) async {
+  Future<void> _startCamera(int idx) async {
     await _stopStream();
-    await _cameraController?.dispose();
+    await _cam?.dispose();
 
-    _cameraController = CameraController(
-      _cameras[index],
-      ResolutionPreset.medium,
+    _cam = CameraController(
+      _cameras[idx],
+      ResolutionPreset.medium, // 640×480 ≈ good balance
       enableAudio: false,
       imageFormatGroup: Platform.isAndroid
           ? ImageFormatGroup.yuv420
@@ -89,151 +94,126 @@ class _DetectionScreenState extends State<DetectionScreen>
     );
 
     try {
-      await _cameraController!.initialize();
+      await _cam!.initialize();
       if (mounted) {
         setState(() {});
         await _startStream();
       }
     } catch (e) {
-      debugPrint('❌ Camera init error: $e');
+      debugPrint('❌ Camera init: $e');
     }
   }
 
   Future<void> _startStream() async {
-    if (_cameraController == null ||
-        !_cameraController!.value.isInitialized ||
-        _isStreamActive) return;
-    _isStreamActive = true;
-    await _cameraController!.startImageStream(_onCameraFrame);
+    if (_cam == null || !_cam!.value.isInitialized || _streamActive) return;
+    _streamActive = true;
+    await _cam!.startImageStream(_onFrame);
+    debugPrint('✅ Camera stream started');
   }
 
   Future<void> _stopStream() async {
-    if (!_isStreamActive) return;
-    _isStreamActive = false;
-    try { await _cameraController?.stopImageStream(); } catch (_) {}
+    if (!_streamActive) return;
+    _streamActive = false;
+    try { await _cam?.stopImageStream(); } catch (_) {}
   }
 
-  // ── Frame processing ────────────────────────────────────────────────────────
+  // ── Frame processing ───────────────────────────────────────────────────────
 
-  void _onCameraFrame(CameraImage cameraImage) {
-    _frameCounter++;
-    if (_frameCounter % _processEveryNFrames != 0) return;
-    if (_isProcessingFrame) return;
-    _isProcessingFrame = true;
-    _processFrameAsync(cameraImage);
+  void _onFrame(CameraImage raw) {
+    _frameCount++;
+    if (_frameCount % _skipFrames != 0) return;
+    if (_busy) return;
+    _busy = true;
+    _processFrame(raw);
   }
 
-  Future<void> _processFrameAsync(CameraImage cameraImage) async {
+  Future<void> _processFrame(CameraImage raw) async {
     try {
-      final imgFrame = _convertCameraImage(cameraImage);
-      if (imgFrame == null) return;
+      final frame = _toImage(raw);
+      if (frame == null) return;
 
-      final modelService = context.read<ModelService>();
-      final result = modelService.processFrame(imgFrame);
+      setState(() => _processedFrames++);
+
+      final model = context.read<ModelService>();
+      if (!model.isLoaded) return;
+
+      final result = model.processFrame(frame);
 
       if (!mounted) return;
 
       if (result != null) {
         context.read<DetectionProvider>().updateDetection(result);
         setState(() {
-          _handDetected = true;
-          _statusMessage =
-              '${result.romanLabel}  ${result.confidencePercent}';
+          _handFound = true;
+          _status = '${result.romanLabel}  ${result.confidencePercent}';
         });
-
-        if (_ttsEnabled &&
-            result.isHighConfidence &&
-            result.romanLabel != _lastSpokenLabel) {
-          _lastSpokenLabel = result.romanLabel;
+        if (_ttsOn && result.isHighConfidence &&
+            result.romanLabel != _lastSpoken) {
+          _lastSpoken = result.romanLabel;
           _tts?.speak(result.urduLabel);
         }
       } else {
         setState(() {
-          _handDetected = false;
-          _statusMessage = 'ہاتھ نہیں ملا — کیمرہ کے سامنے رکھیں';
+          _handFound = false;
+          _status = 'ہاتھ باکس میں رکھیں';
         });
       }
     } catch (e) {
-      debugPrint('❌ processFrame error: $e');
+      debugPrint('❌ frame error: $e');
     } finally {
-      _isProcessingFrame = false;
+      _busy = false;
     }
   }
 
-  /// Convert CameraImage (YUV420 or BGRA) to img.Image
-  img.Image? _convertCameraImage(CameraImage camImage) {
+  // ── Image conversion ───────────────────────────────────────────────────────
+
+  img.Image? _toImage(CameraImage c) {
     try {
-      if (Platform.isAndroid) {
-        return _yuv420ToImage(camImage);
-      } else {
-        return _bgra8888ToImage(camImage);
-      }
+      return Platform.isAndroid ? _yuv(c) : _bgra(c);
     } catch (e) {
-      debugPrint('❌ Image convert error: $e');
+      debugPrint('❌ convert: $e');
       return null;
     }
   }
 
-  img.Image _yuv420ToImage(CameraImage camImage) {
-    final int width = camImage.width;
-    final int height = camImage.height;
-    final image = img.Image(width: width, height: height);
-
-    final yPlane = camImage.planes[0];
-    final uPlane = camImage.planes[1];
-    final vPlane = camImage.planes[2];
-
-    final yBytes = yPlane.bytes;
-    final uBytes = uPlane.bytes;
-    final vBytes = vPlane.bytes;
-
-    final int uvRowStride = uPlane.bytesPerRow;
-    final int uvPixelStride = uPlane.bytesPerPixel!;
-
-    for (int y = 0; y < height; y++) {
-      for (int x = 0; x < width; x++) {
-        final int yIdx = y * yPlane.bytesPerRow + x;
-        final int uvIdx =
-            (y ~/ 2) * uvRowStride + (x ~/ 2) * uvPixelStride;
-
-        final int yVal = yBytes[yIdx];
-        final int uVal = uBytes[uvIdx];
-        final int vVal = vBytes[uvIdx];
-
-        int r = (yVal + 1.402 * (vVal - 128)).round().clamp(0, 255);
-        int g = (yVal - 0.344136 * (uVal - 128) - 0.714136 * (vVal - 128))
-            .round()
-            .clamp(0, 255);
-        int b = (yVal + 1.772 * (uVal - 128)).round().clamp(0, 255);
-
-        image.setPixelRgb(x, y, r, g, b);
+  img.Image _yuv(CameraImage c) {
+    final w = c.width, h = c.height;
+    final out = img.Image(width: w, height: h);
+    final yp = c.planes[0], up = c.planes[1], vp = c.planes[2];
+    final yb = yp.bytes, ub = up.bytes, vb = vp.bytes;
+    final uvRow = up.bytesPerRow, uvPx = up.bytesPerPixel!;
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        final yi = y * yp.bytesPerRow + x;
+        final ui = (y ~/ 2) * uvRow + (x ~/ 2) * uvPx;
+        final yv = yb[yi], u = ub[ui], v = vb[ui];
+        final r = (yv + 1.402 * (v - 128)).round().clamp(0, 255);
+        final g = (yv - 0.344136 * (u - 128) - 0.714136 * (v - 128)).round().clamp(0, 255);
+        final b = (yv + 1.772 * (u - 128)).round().clamp(0, 255);
+        out.setPixelRgb(x, y, r, g, b);
       }
     }
-    return image;
+    return out;
   }
 
-  img.Image _bgra8888ToImage(CameraImage camImage) {
-    return img.Image.fromBytes(
-      width: camImage.width,
-      height: camImage.height,
-      bytes: camImage.planes[0].bytes.buffer,
-      format: img.Format.uint8,
-      order: img.ChannelOrder.bgra,
-    );
-  }
+  img.Image _bgra(CameraImage c) => img.Image.fromBytes(
+    width: c.width, height: c.height,
+    bytes: c.planes[0].bytes.buffer,
+    format: img.Format.uint8,
+    order: img.ChannelOrder.bgra,
+  );
 
   Future<void> _switchCamera() async {
     if (_cameras.length < 2) return;
-    _cameraIndex = (_cameraIndex + 1) % _cameras.length;
-    await _startCamera(_cameraIndex);
+    _camIdx = (_camIdx + 1) % _cameras.length;
+    await _startCamera(_camIdx);
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive) {
-      _stopStream();
-    } else if (state == AppLifecycleState.resumed) {
-      if (_cameras.isNotEmpty) _startCamera(_cameraIndex);
+  void didChangeAppLifecycleState(AppLifecycleState s) {
+    if (s == AppLifecycleState.inactive) _stopStream();
+    else if (s == AppLifecycleState.resumed && _cameras.isNotEmpty) {
+      _startCamera(_camIdx);
     }
   }
 
@@ -241,12 +221,12 @@ class _DetectionScreenState extends State<DetectionScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _stopStream();
-    _cameraController?.dispose();
+    _cam?.dispose();
     _tts?.stop();
     super.dispose();
   }
 
-  // ── UI ──────────────────────────────────────────────────────────────────────
+  // ── UI ─────────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -254,302 +234,209 @@ class _DetectionScreenState extends State<DetectionScreen>
       backgroundColor: Colors.black,
       body: SafeArea(
         child: Stack(children: [
-          _buildCameraView(),
+          _buildCamera(),
           _buildGuideBox(),
           _buildTopBar(),
           _buildStatusBadge(),
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            child: _buildBottomPanel(),
-          ),
+          Positioned(bottom: 0, left: 0, right: 0, child: _buildBottom()),
         ]),
       ),
     );
   }
 
-  /// Green guide box so user knows where to hold their hand
+  Widget _buildCamera() {
+    if (!_hasPermission) {
+      return Container(color: const Color(0xFF0A0A1A),
+        child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.videocam_off, color: Colors.white38, size: 64),
+            const SizedBox(height: 16),
+            const Text('کیمرہ اجازت درکار ہے',
+              style: TextStyle(fontFamily: 'JameelNooriNastaleeq',
+                  color: Colors.white54, fontSize: 18),
+              textDirection: TextDirection.rtl),
+            const SizedBox(height: 16),
+            ElevatedButton(onPressed: _requestAndInit,
+                child: const Text('Allow Camera')),
+          ])));
+    }
+    if (_cam == null || !_cam!.value.isInitialized) {
+      return Container(color: const Color(0xFF0A0A1A),
+        child: const Center(
+            child: CircularProgressIndicator(color: Color(0xFF006400))));
+    }
+    return SizedBox.expand(
+      child: FittedBox(fit: BoxFit.cover,
+        child: SizedBox(
+          width: _cam!.value.previewSize!.height,
+          height: _cam!.value.previewSize!.width,
+          child: CameraPreview(_cam!),
+        )));
+  }
+
+  /// Guide box — user should put hand here
   Widget _buildGuideBox() {
     return Center(
       child: Container(
-        width: 220,
-        height: 220,
+        width: 240, height: 240,
         decoration: BoxDecoration(
           border: Border.all(
-            color: _handDetected
-                ? const Color(0xFF00C853)
-                : Colors.white38,
-            width: 2,
+            color: _handFound ? const Color(0xFF00C853) : Colors.white38,
+            width: _handFound ? 3 : 2,
           ),
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(20),
         ),
-        child: _handDetected
-            ? null
-            : const Center(
-                child: Text(
-                  'ہاتھ یہاں رکھیں',
-                  style: TextStyle(
-                    fontFamily: 'JameelNooriNastaleeq',
-                    color: Colors.white38,
-                    fontSize: 14,
-                  ),
-                  textDirection: TextDirection.rtl,
-                ),
-              ),
-      ),
-    );
-  }
-
-  Widget _buildCameraView() {
-    if (!_cameraPermissionGranted) {
-      return Container(
-        color: const Color(0xFF0A0A1A),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.videocam_off, color: Colors.white38, size: 64),
-              const SizedBox(height: 16),
-              const Text(
-                'کیمرہ اجازت درکار ہے',
-                style: TextStyle(
-                    fontFamily: 'JameelNooriNastaleeq',
-                    color: Colors.white54,
-                    fontSize: 18),
-                textDirection: TextDirection.rtl,
-              ),
-              const SizedBox(height: 16),
-              ElevatedButton(
-                onPressed: _requestPermissionAndInit,
-                child: const Text('Allow Camera'),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    if (_cameraController == null ||
-        !_cameraController!.value.isInitialized) {
-      return Container(
-        color: const Color(0xFF0A0A1A),
-        child: const Center(
-          child: CircularProgressIndicator(color: Color(0xFF006400)),
-        ),
-      );
-    }
-
-    return SizedBox.expand(
-      child: FittedBox(
-        fit: BoxFit.cover,
-        child: SizedBox(
-          width: _cameraController!.value.previewSize!.height,
-          height: _cameraController!.value.previewSize!.width,
-          child: CameraPreview(_cameraController!),
+        child: _handFound ? null : const Center(
+          child: Text('ہاتھ یہاں رکھیں',
+            style: TextStyle(fontFamily: 'JameelNooriNastaleeq',
+                color: Colors.white38, fontSize: 14),
+            textDirection: TextDirection.rtl),
         ),
       ),
     );
   }
 
   Widget _buildTopBar() {
-    return Positioned(
-      top: 0, left: 0, right: 0,
+    return Positioned(top: 0, left: 0, right: 0,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Colors.black.withOpacity(0.7), Colors.transparent],
-          ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        decoration: BoxDecoration(gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Colors.black.withOpacity(0.75), Colors.transparent])),
+        child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Row(children: [
-              _TopBarBtn(icon: Icons.arrow_back_ios,
-                  onTap: () => Navigator.pop(context)),
+              _Btn(icon: Icons.arrow_back_ios, onTap: () => Navigator.pop(context)),
               if (_cameras.length > 1) ...[
                 const SizedBox(width: 8),
-                _TopBarBtn(icon: Icons.flip_camera_ios, onTap: _switchCamera),
+                _Btn(icon: Icons.flip_camera_ios, onTap: _switchCamera),
               ],
             ]),
             const Text('شناخت',
-                style: TextStyle(
-                    fontFamily: 'JameelNooriNastaleeq',
-                    color: Colors.white,
-                    fontSize: 20),
-                textDirection: TextDirection.rtl),
+              style: TextStyle(fontFamily: 'JameelNooriNastaleeq',
+                  color: Colors.white, fontSize: 20),
+              textDirection: TextDirection.rtl),
             Row(children: [
-              _TopBarBtn(
-                icon: _ttsEnabled ? Icons.volume_up : Icons.volume_off,
-                onTap: () => setState(() => _ttsEnabled = !_ttsEnabled),
-                active: _ttsEnabled,
+              _Btn(
+                icon: _ttsOn ? Icons.volume_up : Icons.volume_off,
+                onTap: () => setState(() => _ttsOn = !_ttsOn),
+                active: _ttsOn,
               ),
               const SizedBox(width: 8),
-              _TopBarBtn(
-                icon: Icons.delete_outline,
-                onTap: () {
-                  context.read<DetectionProvider>().clearAll();
-                  setState(() {
-                    _handDetected = false;
-                    _statusMessage = 'ہاتھ کیمرہ کے سامنے رکھیں';
-                  });
-                },
-              ),
+              _Btn(icon: Icons.delete_outline, onTap: () {
+                context.read<DetectionProvider>().clearAll();
+                setState(() { _handFound = false; _status = 'ہاتھ کیمرہ کے سامنے رکھیں'; });
+              }),
             ]),
-          ],
-        ),
-      ),
-    );
+          ]),
+      ));
   }
 
   Widget _buildStatusBadge() {
-    return Positioned(
-      top: 70, left: 16, right: 16,
-      child: Center(
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 300),
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-          decoration: BoxDecoration(
-            color: _handDetected
-                ? const Color(0xFF00C853).withOpacity(0.2)
-                : Colors.black.withOpacity(0.55),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: _handDetected
-                  ? const Color(0xFF00C853).withOpacity(0.6)
-                  : Colors.white24,
-            ),
-          ),
-          child: Text(
-            _statusMessage,
-            style: TextStyle(
-              fontFamily: 'JameelNooriNastaleeq',
-              color: _handDetected
-                  ? const Color(0xFF00C853)
-                  : Colors.white60,
-              fontSize: 13,
-            ),
-            textDirection: TextDirection.rtl,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildBottomPanel() {
-    return Consumer<DetectionProvider>(
-      builder: (context, provider, _) => Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.bottomCenter,
-            end: Alignment.topCenter,
-            colors: [
-              Colors.black.withOpacity(0.97),
-              Colors.black.withOpacity(0.7),
-              Colors.transparent,
-            ],
-          ),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (provider.lastResult != null)
-              _buildResultCard(provider.lastResult!),
-            const SizedBox(height: 8),
-            _buildWordDisplay(provider),
-            const SizedBox(height: 12),
-            _buildActionRow(provider),
-            const SizedBox(height: 16),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildResultCard(DetectionResult result) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(result.romanLabel,
-                    style: const TextStyle(
-                        color: Colors.white60, fontSize: 13, letterSpacing: 1)),
-                const SizedBox(height: 6),
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(4),
-                  child: LinearProgressIndicator(
-                    value: result.confidence,
-                    backgroundColor: Colors.white12,
-                    color: result.confidenceColor,
-                    minHeight: 6,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  'Confidence: ${result.confidencePercent}',
-                  style: TextStyle(color: result.confidenceColor, fontSize: 11),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 16),
-          Container(
-            width: 88,
-            height: 88,
+    return Positioned(top: 70, left: 16, right: 16,
+      child: Column(children: [
+        Center(
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 300),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [
-                const Color(0xFF006400).withOpacity(0.85),
-                const Color(0xFF00A300).withOpacity(0.6),
-              ]),
+              color: _handFound
+                  ? const Color(0xFF00C853).withOpacity(0.2)
+                  : Colors.black.withOpacity(0.6),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                  color: result.confidenceColor.withOpacity(0.6), width: 2),
-              boxShadow: [
-                BoxShadow(
-                    color: result.confidenceColor.withOpacity(0.3),
-                    blurRadius: 20)
-              ],
+                color: _handFound
+                    ? const Color(0xFF00C853).withOpacity(0.6)
+                    : Colors.white24),
             ),
-            child: Center(
-              child: Text(
-                result.urduLabel,
-                style: const TextStyle(
-                    fontFamily: 'JameelNooriNastaleeq',
-                    color: Colors.white,
-                    fontSize: 42),
-                textDirection: TextDirection.rtl,
-              ),
-            ),
+            child: Text(_status,
+              style: TextStyle(
+                fontFamily: 'JameelNooriNastaleeq',
+                color: _handFound ? const Color(0xFF00C853) : Colors.white60,
+                fontSize: 13),
+              textDirection: TextDirection.rtl),
           ),
-        ],
+        ),
+        const SizedBox(height: 6),
+        // Debug counter — helps confirm frames are being processed
+        Text('Frames processed: $_processedFrames',
+          style: const TextStyle(color: Colors.white30, fontSize: 10)),
+      ]),
+    );
+  }
+
+  Widget _buildBottom() {
+    return Consumer<DetectionProvider>(
+      builder: (ctx, p, _) => Container(
+        decoration: BoxDecoration(gradient: LinearGradient(
+          begin: Alignment.bottomCenter, end: Alignment.topCenter,
+          colors: [Colors.black.withOpacity(0.97),
+            Colors.black.withOpacity(0.75), Colors.transparent])),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          if (p.lastResult != null) _buildCard(p.lastResult!),
+          const SizedBox(height: 8),
+          _buildWordBox(p),
+          const SizedBox(height: 12),
+          _buildActions(p),
+          const SizedBox(height: 16),
+        ]),
       ),
     );
   }
 
-  Widget _buildWordDisplay(DetectionProvider provider) {
-    final text = provider.fullText;
+  Widget _buildCard(DetectionResult r) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 0),
+      child: Row(children: [
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(r.romanLabel,
+                style: const TextStyle(color: Colors.white60, fontSize: 13)),
+            const SizedBox(height: 6),
+            ClipRRect(borderRadius: BorderRadius.circular(4),
+              child: LinearProgressIndicator(value: r.confidence,
+                  backgroundColor: Colors.white12,
+                  color: r.confidenceColor, minHeight: 6)),
+            const SizedBox(height: 3),
+            Text('Confidence: ${r.confidencePercent}',
+                style: TextStyle(color: r.confidenceColor, fontSize: 11)),
+          ])),
+        const SizedBox(width: 16),
+        Container(
+          width: 90, height: 90,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(colors: [
+              const Color(0xFF006400).withOpacity(0.85),
+              const Color(0xFF00A300).withOpacity(0.6)]),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: r.confidenceColor.withOpacity(0.6), width: 2),
+            boxShadow: [BoxShadow(
+                color: r.confidenceColor.withOpacity(0.3), blurRadius: 20)]),
+          child: Center(child: Text(r.urduLabel,
+            style: const TextStyle(fontFamily: 'JameelNooriNastaleeq',
+                color: Colors.white, fontSize: 44),
+            textDirection: TextDirection.rtl)),
+        ),
+      ]),
+    );
+  }
+
+  Widget _buildWordBox(DetectionProvider p) {
+    final text = p.fullText;
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: const Color(0xFF0D1B2A).withOpacity(0.9),
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white12),
-      ),
+        border: Border.all(color: Colors.white12)),
       child: Column(children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Text('Frames: ${provider.detectionCount}',
+          Text('Detections: ${p.detectionCount}',
               style: const TextStyle(color: Colors.white38, fontSize: 10)),
           const Text('شناخت شدہ',
-              style: TextStyle(
-                  fontFamily: 'JameelNooriNastaleeq',
-                  color: Color(0xFFC8A951),
-                  fontSize: 13),
+              style: TextStyle(fontFamily: 'JameelNooriNastaleeq',
+                  color: Color(0xFFC8A951), fontSize: 13),
               textDirection: TextDirection.rtl),
         ]),
         const SizedBox(height: 8),
@@ -559,105 +446,75 @@ class _DetectionScreenState extends State<DetectionScreen>
           decoration: BoxDecoration(
               color: Colors.black26,
               borderRadius: BorderRadius.circular(10)),
-          child: Text(
-            text.isEmpty ? '...' : text,
-            style: const TextStyle(
-                fontFamily: 'JameelNooriNastaleeq',
-                color: Colors.white,
-                fontSize: 26),
+          child: Text(text.isEmpty ? '...' : text,
+            style: const TextStyle(fontFamily: 'JameelNooriNastaleeq',
+                color: Colors.white, fontSize: 26),
             textDirection: TextDirection.rtl,
-            textAlign: TextAlign.center,
-          ),
+            textAlign: TextAlign.center),
         ),
       ]),
     );
   }
 
-  Widget _buildActionRow(DetectionProvider provider) {
+  Widget _buildActions(DetectionProvider p) {
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 20),
       child: Row(children: [
-        _ActionBtn(
-            icon: Icons.space_bar, label: 'Space',
-            onTap: provider.addSpaceToWord,
-            color: const Color(0xFF1565C0)),
+        _Act(icon: Icons.space_bar, label: 'Space',
+            onTap: p.addSpaceToWord, color: const Color(0xFF1565C0)),
         const SizedBox(width: 6),
-        _ActionBtn(
-            icon: Icons.backspace_outlined, label: 'Undo',
-            onTap: provider.undoLastLetter,
-            color: const Color(0xFF6A1B9A)),
+        _Act(icon: Icons.backspace_outlined, label: 'Undo',
+            onTap: p.undoLastLetter, color: const Color(0xFF6A1B9A)),
         const SizedBox(width: 6),
-        _ActionBtn(
-            icon: Icons.volume_up, label: 'Speak',
+        _Act(icon: Icons.volume_up, label: 'Speak',
             onTap: () async {
-              final t = provider.fullText;
+              final t = p.fullText;
               if (t.isNotEmpty) await _tts?.speak(t);
-            },
-            color: const Color(0xFF00695C)),
+            }, color: const Color(0xFF00695C)),
         const SizedBox(width: 6),
-        _ActionBtn(
-            icon: Icons.clear_all, label: 'Clear',
+        _Act(icon: Icons.clear_all, label: 'Clear',
             onTap: () {
-              provider.clearAll();
-              setState(() {
-                _handDetected = false;
-                _statusMessage = 'ہاتھ کیمرہ کے سامنے رکھیں';
-              });
-            },
-            color: const Color(0xFFB71C1C)),
+              p.clearAll();
+              setState(() { _handFound = false; _status = 'ہاتھ کیمرہ کے سامنے رکھیں'; });
+            }, color: const Color(0xFFB71C1C)),
       ]),
     );
   }
 }
 
-// ── Small reusable widgets ────────────────────────────────────────────────────
+// ── Reusable small widgets ────────────────────────────────────────────────────
 
-class _TopBarBtn extends StatelessWidget {
+class _Btn extends StatelessWidget {
   final IconData icon;
   final VoidCallback onTap;
   final bool active;
-  const _TopBarBtn({required this.icon, required this.onTap, this.active = true});
-
+  const _Btn({required this.icon, required this.onTap, this.active = true});
   @override
-  Widget build(BuildContext context) => GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(10),
-          decoration: BoxDecoration(
-            color: Colors.black.withOpacity(0.5),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.white24),
-          ),
-          child: Icon(icon, color: active ? Colors.white : Colors.white38, size: 20),
-        ),
-      );
+  Widget build(BuildContext context) => GestureDetector(onTap: onTap,
+    child: Container(padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(color: Colors.black.withOpacity(0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white24)),
+      child: Icon(icon, color: active ? Colors.white : Colors.white38, size: 20)));
 }
 
-class _ActionBtn extends StatelessWidget {
+class _Act extends StatelessWidget {
   final IconData icon;
   final String label;
   final VoidCallback onTap;
   final Color color;
-  const _ActionBtn({required this.icon, required this.label,
+  const _Act({required this.icon, required this.label,
       required this.onTap, required this.color});
-
   @override
   Widget build(BuildContext context) => Expanded(
-        child: GestureDetector(
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(vertical: 10),
-            decoration: BoxDecoration(
-              color: color.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: color.withOpacity(0.4)),
-            ),
-            child: Column(children: [
-              Icon(icon, color: color, size: 20),
-              const SizedBox(height: 3),
-              Text(label, style: TextStyle(color: color, fontSize: 10)),
-            ]),
-          ),
-        ),
-      );
+    child: GestureDetector(onTap: onTap,
+      child: Container(padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(color: color.withOpacity(0.2),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.4))),
+        child: Column(children: [
+          Icon(icon, color: color, size: 20),
+          const SizedBox(height: 3),
+          Text(label, style: TextStyle(color: color, fontSize: 10)),
+        ]))));
 }
