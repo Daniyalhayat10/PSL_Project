@@ -11,15 +11,11 @@ class DetectionProvider extends ChangeNotifier {
   int _detectionCount = 0;
   DateTime? _lastLetterAddedTime;
 
-  // Minimum milliseconds between adding the SAME letter again
-  static const int _sameLetterCooldownMs = 1500;
-  // Minimum consecutive stable detections before confirming a letter
-  static const int _stableFramesRequired = 4;
-  // Minimum confidence to add to word
-  static const double _minConfidenceToAdd = 0.65;
+  static const int _sameLetterCooldownMs = 1800;
+  static const int _stableFramesRequired = 5;
 
   DetectionResult? get lastResult => _lastResult;
-  List<DetectionResult> get recentHistory => _recentHistory;
+  List<DetectionResult> get recentHistory => List.unmodifiable(_recentHistory);
   bool get isDetecting => _isDetecting;
   bool get isCameraActive => _isCameraActive;
   String get detectedWord => _detectedWord;
@@ -28,40 +24,26 @@ class DetectionProvider extends ChangeNotifier {
   String get fullText =>
       _detectedSentence.isEmpty ? _detectedWord : '$_detectedSentence$_detectedWord';
 
-  void setDetecting(bool value) {
-    _isDetecting = value;
-    notifyListeners();
-  }
-
-  void setCameraActive(bool value) {
-    _isCameraActive = value;
-    notifyListeners();
-  }
+  void setDetecting(bool v) { _isDetecting = v; notifyListeners(); }
+  void setCameraActive(bool v) { _isCameraActive = v; notifyListeners(); }
 
   void updateDetection(DetectionResult result) {
     _lastResult = result;
     _detectionCount++;
 
-    // Keep rolling history of last 15
     _recentHistory.insert(0, result);
-    if (_recentHistory.length > 15) {
-      _recentHistory = _recentHistory.sublist(0, 15);
+    if (_recentHistory.length > 20) {
+      _recentHistory = _recentHistory.sublist(0, 20);
     }
 
-    // Only attempt to add a letter if confidence is high enough
-    if (!result.isHighConfidence) {
-      notifyListeners();
-      return;
-    }
+    // Only add letter if confidence is high enough
+    if (!result.isHighConfidence) { notifyListeners(); return; }
 
-    // Check for stable detection: last N frames all predict same label
+    // Require N stable consecutive frames with same label
     if (_recentHistory.length >= _stableFramesRequired) {
       final recent = _recentHistory.sublist(0, _stableFramesRequired);
       final allSame = recent.every((r) => r.urduLabel == result.urduLabel);
-
-      if (allSame) {
-        _tryAddLetter(result.urduLabel);
-      }
+      if (allSame) _tryAddLetter(result.urduLabel);
     }
 
     notifyListeners();
@@ -69,31 +51,13 @@ class DetectionProvider extends ChangeNotifier {
 
   void _tryAddLetter(String letter) {
     final now = DateTime.now();
-
-    // Cooldown: don't add same letter twice within cooldown period
     if (_lastLetterAddedTime != null) {
       final elapsed = now.difference(_lastLetterAddedTime!).inMilliseconds;
-
-      // If same letter, apply cooldown
-      if (_detectedWord.isNotEmpty) {
-        final lastChar = _urduLastChar(_detectedWord);
-        if (lastChar == letter && elapsed < _sameLetterCooldownMs) {
-          return;
-        }
-      } else if (elapsed < _sameLetterCooldownMs ~/ 2) {
-        return; // general small cooldown even for new letters
-      }
+      if (elapsed < _sameLetterCooldownMs) return;
     }
-
     _detectedWord += letter;
     _lastLetterAddedTime = now;
-    debugPrint('✅ Letter added: $letter | Word: $_detectedWord');
-  }
-
-  /// Manually add a specific letter (for future manual input feature)
-  void addLetter(String letter) {
-    _detectedWord += letter;
-    notifyListeners();
+    debugPrint('✅ Added: $letter  Word: $_detectedWord');
   }
 
   void addSpaceToWord() {
@@ -107,10 +71,10 @@ class DetectionProvider extends ChangeNotifier {
 
   void undoLastLetter() {
     if (_detectedWord.isNotEmpty) {
-      _detectedWord = _urduRemoveLast(_detectedWord);
+      final runes = _detectedWord.runes.toList();
+      _detectedWord = String.fromCharCodes(runes.take(runes.length - 1));
       notifyListeners();
     } else if (_detectedSentence.isNotEmpty) {
-      // Remove last word from sentence
       final trimmed = _detectedSentence.trimRight();
       final lastSpace = trimmed.lastIndexOf(' ');
       if (lastSpace >= 0) {
@@ -138,22 +102,5 @@ class DetectionProvider extends ChangeNotifier {
     _detectedWord = '';
     _lastLetterAddedTime = null;
     notifyListeners();
-  }
-
-  // ─── Urdu string helpers ───────────────────────────────────────────────────
-
-  /// Remove last Urdu grapheme cluster from string
-  String _urduRemoveLast(String s) {
-    if (s.isEmpty) return s;
-    final runes = s.runes.toList();
-    if (runes.isEmpty) return '';
-    return String.fromCharCodes(runes.take(runes.length - 1));
-  }
-
-  /// Get last Urdu character from string
-  String _urduLastChar(String s) {
-    if (s.isEmpty) return '';
-    final runes = s.runes.toList();
-    return String.fromCharCode(runes.last);
   }
 }

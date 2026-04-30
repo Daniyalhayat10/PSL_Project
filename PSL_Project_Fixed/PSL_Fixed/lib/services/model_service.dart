@@ -1,10 +1,16 @@
-import 'dart:typed_data';
 import 'dart:math';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
+import 'package:image/image.dart' as img;
 
 class ModelService extends ChangeNotifier {
-  Interpreter? _interpreter;
+  // Two models:
+  // 1. hand_landmark_lite.tflite  → detects 21 hand landmarks from image
+  // 2. hand_landmark_nn.tflite    → classifies sign from 63 landmark values
+  Interpreter? _landmarkInterpreter;
+  Interpreter? _classifierInterpreter;
+
   bool _isLoaded = false;
   bool _isLoading = false;
   String _loadError = '';
@@ -13,91 +19,25 @@ class ModelService extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String get loadError => _loadError;
 
-  // ── Label order must match training label_encoder.pkl (alphabetical) ───────
-  // 37 classes matching classes.txt exactly
+  // ── Labels (order matches training label_encoder) ─────────────────────────
   static const List<String> romanLabels = [
-    'Ain',         // 0
-    'Alif',        // 1
-    'Bay',         // 2
-    'Daal',        // 3
-    'Duaad',       // 4
-    'Fay',         // 5
-    'Gaaf',        // 6
-    'Hay',         // 7
-    'Hay2',        // 8
-    'Kaaf',        // 9
-    'Khay',        // 10
-    'Laam',        // 11
-    'Meem',        // 12
-    'Noon',        // 13
-    'Pay',         // 14
-    'Ray',         // 15
-    'Say',         // 16
-    'Say2',        // 17
-    'Sheen',       // 18
-    'Suaad',       // 19
-    'Tay',         // 20
-    'Tua',         // 21
-    'Wow',         // 22
-    'Zay',         // 23
-    'Zua',         // 24
-    'Alif Hamza',  // 25
-    'Bari Yay',    // 26
-    'Chay',        // 27
-    'Choti Yay',   // 28
-    'Dal Darwaza', // 29
-    'Hamza',       // 30
-    'Jeem',        // 31
-    'Noon Ghunna', // 32
-    'Rdy',         // 33
-    'Taay',        // 34
-    'Yaay',        // 35
-    'Zaal',        // 36
+    'Ain', 'Alif', 'Bay', 'Daal', 'Duaad', 'Fay', 'Gaaf', 'Hay', 'Hay2',
+    'Kaaf', 'Khay', 'Laam', 'Meem', 'Noon', 'Pay', 'Ray', 'Say', 'Say2',
+    'Sheen', 'Suaad', 'Tay', 'Tua', 'Wow', 'Zay', 'Zua',
+    'alif hamza', 'bari yaay', 'chay', 'choti yaay', 'dal drwaza',
+    'hamza', 'jeem', "noon ghun'na", 'rdy', 'taay', 'yaay', 'zaal',
   ];
 
   static const List<String> urduLabels = [
-    'ع',  // 0  Ain
-    'ا',  // 1  Alif
-    'ب',  // 2  Bay
-    'د',  // 3  Daal
-    'ض',  // 4  Duaad
-    'ف',  // 5  Fay
-    'گ',  // 6  Gaaf
-    'ح',  // 7  Hay
-    'ہ',  // 8  Hay2
-    'ک',  // 9  Kaaf
-    'خ',  // 10 Khay
-    'ل',  // 11 Laam
-    'م',  // 12 Meem
-    'ن',  // 13 Noon
-    'پ',  // 14 Pay
-    'ر',  // 15 Ray
-    'ث',  // 16 Say
-    'س',  // 17 Say2
-    'ش',  // 18 Sheen
-    'ص',  // 19 Suaad
-    'ت',  // 20 Tay
-    'ط',  // 21 Tua
-    'و',  // 22 Wow
-    'ز',  // 23 Zay
-    'ظ',  // 24 Zua
-    'أ',  // 25 Alif Hamza
-    'ے',  // 26 Bari Yay
-    'چ',  // 27 Chay
-    'ی',  // 28 Choti Yay
-    'ڈ',  // 29 Dal Darwaza
-    'ء',  // 30 Hamza
-    'ج',  // 31 Jeem
-    'ں',  // 32 Noon Ghunna
-    'ڑ',  // 33 Rdy
-    'ٹ',  // 34 Taay
-    'ی',  // 35 Yaay  (same glyph as Choti Yay in many fonts)
-    'ذ',  // 36 Zaal
+    'ع', 'ا', 'ب', 'د', 'ض', 'ف', 'گ', 'ح', 'ہ',
+    'ک', 'خ', 'ل', 'م', 'ن', 'پ', 'ر', 'ث', 'س',
+    'ش', 'ص', 'ت', 'ط', 'و', 'ز', 'ظ',
+    'أ', 'ے', 'چ', 'ی', 'ڈ',
+    'ء', 'ج', 'ں', 'ڑ', 'ٹ', 'ی', 'ذ',
   ];
 
-  // NOTE: If model outputs 36 classes, change this to 36.
-  // Check by running: interpreter.getOutputTensor(0).shape
-  static const int numClasses = 37;
+  // MediaPipe hand landmark model input size
+  static const int _landmarkInputSize = 224;
 
   Future<void> loadModel() async {
     if (_isLoading || _isLoaded) return;
@@ -107,15 +47,30 @@ class ModelService extends ChangeNotifier {
 
     try {
       final options = InterpreterOptions()..threads = 4;
-      _interpreter = await Interpreter.fromAsset(
+
+      // Load classifier (your trained model)
+      _classifierInterpreter = await Interpreter.fromAsset(
         'assets/models/hand_landmark_nn.tflite',
         options: options,
       );
 
-      // Log actual model shapes so you can verify
-      final inputShape = _interpreter!.getInputTensor(0).shape;
-      final outputShape = _interpreter!.getOutputTensor(0).shape;
-      debugPrint('✅ Model loaded. Input: $inputShape  Output: $outputShape');
+      // Load MediaPipe hand landmark model
+      // Download from: https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task
+      // Or the raw TFLite: https://storage.googleapis.com/mediapipe-assets/hand_landmark_lite.tflite
+      try {
+        _landmarkInterpreter = await Interpreter.fromAsset(
+          'assets/models/hand_landmark_lite.tflite',
+          options: options,
+        );
+        debugPrint('✅ Hand landmark model loaded');
+      } catch (e) {
+        debugPrint('⚠️ hand_landmark_lite.tflite not found — will use center-crop mode');
+        _landmarkInterpreter = null;
+      }
+
+      final inShape = _classifierInterpreter!.getInputTensor(0).shape;
+      final outShape = _classifierInterpreter!.getOutputTensor(0).shape;
+      debugPrint('✅ Classifier loaded. Input: $inShape  Output: $outShape');
 
       _isLoaded = true;
     } catch (e) {
@@ -128,26 +83,97 @@ class ModelService extends ChangeNotifier {
     }
   }
 
-  /// Run inference on exactly 63 normalised landmark values (21 pts × x,y,z).
-  /// Returns null if model not loaded or inference fails — NO random fallback.
-  DetectionResult? runInference(List<double> landmarks) {
-    if (!_isLoaded || _interpreter == null) return null;
-    if (landmarks.length != 63) {
-      debugPrint('❌ Expected 63 landmarks, got ${landmarks.length}');
-      return null;
+  // ── Public API ─────────────────────────────────────────────────────────────
+
+  /// Process a camera frame:
+  /// 1. Resize to 224×224
+  /// 2. Run hand landmark model (if available) → 21 landmarks
+  /// 3. Normalise landmarks
+  /// 4. Run classifier → letter
+  DetectionResult? processFrame(img.Image frame) {
+    if (!_isLoaded || _classifierInterpreter == null) return null;
+
+    List<double>? landmarks;
+
+    if (_landmarkInterpreter != null) {
+      landmarks = _runLandmarkModel(frame);
     }
-    return _runTFLite(landmarks);
+
+    // If landmark model not available or failed, we cannot classify
+    if (landmarks == null || landmarks.isEmpty) return null;
+
+    return _runClassifier(landmarks);
   }
 
-  DetectionResult? _runTFLite(List<double> landmarks) {
-    try {
-      // Determine actual output size from model
-      final outputTensor = _interpreter!.getOutputTensor(0);
-      final actualClasses = outputTensor.shape.last;
+  /// Run inference directly on 63 pre-computed normalised landmarks.
+  DetectionResult? runInference(List<double> landmarks) {
+    if (!_isLoaded || _classifierInterpreter == null) return null;
+    if (landmarks.length != 63) return null;
+    return _runClassifier(landmarks);
+  }
 
-      final input = [landmarks]; // shape [1, 63]
-      final output = List.filled(actualClasses, 0.0).reshape([1, actualClasses]);
-      _interpreter!.run(input, output);
+  // ── Private ────────────────────────────────────────────────────────────────
+
+  /// Run MediaPipe hand landmark TFLite model on frame.
+  /// Input:  [1, 224, 224, 3]  float32, values 0-1
+  /// Output: [1, 63]           float32, normalised xyz per landmark
+  List<double>? _runLandmarkModel(img.Image frame) {
+    try {
+      final resized = img.copyResize(
+          frame, width: _landmarkInputSize, height: _landmarkInputSize);
+
+      // Build [1, 224, 224, 3] float32 input
+      final inputBuffer =
+          List.generate(1, (_) =>
+            List.generate(_landmarkInputSize, (y) =>
+              List.generate(_landmarkInputSize, (x) {
+                final pixel = resized.getPixel(x, y);
+                return [
+                  pixel.r / 255.0,
+                  pixel.g / 255.0,
+                  pixel.b / 255.0,
+                ];
+              })
+            )
+          );
+
+      // Determine output shape from model
+      final outShape = _landmarkInterpreter!.getOutputTensor(0).shape;
+      final numLandmarks = outShape.last; // 63 or 21*3
+
+      final outputBuffer =
+          List.filled(numLandmarks, 0.0).reshape([1, numLandmarks]);
+
+      _landmarkInterpreter!.run(inputBuffer, outputBuffer);
+
+      final raw = (outputBuffer[0] as List).cast<double>();
+
+      if (raw.length < 63) {
+        debugPrint('⚠️ Landmark model output ${raw.length} values, expected 63');
+        return null;
+      }
+
+      // Reshape to 21 × [x,y,z] and normalise
+      final pts = List.generate(21, (i) =>
+          [raw[i * 3], raw[i * 3 + 1], raw[i * 3 + 2]]);
+
+      return normalizeLandmarks(pts);
+    } catch (e) {
+      debugPrint('❌ Landmark model error: $e');
+      return null;
+    }
+  }
+
+  DetectionResult? _runClassifier(List<double> landmarks) {
+    try {
+      final outTensor = _classifierInterpreter!.getOutputTensor(0);
+      final numClasses = outTensor.shape.last;
+
+      final input = [landmarks];
+      final output =
+          List.filled(numClasses, 0.0).reshape([1, numClasses]);
+
+      _classifierInterpreter!.run(input, output);
 
       final probs = (output[0] as List).cast<double>();
       int maxIdx = 0;
@@ -160,38 +186,32 @@ class ModelService extends ChangeNotifier {
       }
 
       debugPrint(
-          '🔍 Predicted: ${maxIdx < romanLabels.length ? romanLabels[maxIdx] : maxIdx}'
+          '🔍 ${maxIdx < romanLabels.length ? romanLabels[maxIdx] : maxIdx}'
           ' (${(maxVal * 100).toStringAsFixed(1)}%)');
 
-      return _buildResult(maxIdx, maxVal, probs);
+      return DetectionResult(
+        classIndex: maxIdx,
+        urduLabel:
+            maxIdx < urduLabels.length ? urduLabels[maxIdx] : '?',
+        romanLabel:
+            maxIdx < romanLabels.length ? romanLabels[maxIdx] : 'Unknown',
+        confidence: maxVal,
+        allProbabilities: probs,
+      );
     } catch (e) {
-      debugPrint('❌ TFLite inference error: $e');
+      debugPrint('❌ Classifier error: $e');
       return null;
     }
   }
 
-  DetectionResult _buildResult(int idx, double conf, List<double> probs) {
-    return DetectionResult(
-      classIndex: idx,
-      urduLabel: idx < urduLabels.length ? urduLabels[idx] : '?',
-      romanLabel: idx < romanLabels.length ? romanLabels[idx] : 'Unknown',
-      confidence: conf,
-      allProbabilities: probs,
-    );
-  }
+  // ── Normalisation (must match Python training code exactly) ───────────────
 
-  /// Normalise landmarks exactly as Python training code:
-  ///   1. Subtract wrist (landmark 0) → translate to wrist-relative
-  ///   2. Divide by max absolute value → scale to [-1, 1]
   static List<double> normalizeLandmarks(List<List<double>> raw) {
-    if (raw.length != 21) {
-      debugPrint('❌ normalizeLandmarks: expected 21 points, got ${raw.length}');
-      return [];
-    }
+    if (raw.length != 21) return [];
 
     final flat = raw.expand((p) => p).toList();
 
-    // Step 1: wrist-relative
+    // Step 1: wrist-relative (subtract landmark 0)
     final wx = flat[0], wy = flat[1], wz = flat[2];
     for (int i = 0; i < flat.length; i += 3) {
       flat[i] -= wx;
@@ -199,12 +219,10 @@ class ModelService extends ChangeNotifier {
       flat[i + 2] -= wz;
     }
 
-    // Step 2: max-scale normalisation
+    // Step 2: max-abs scale to [-1, 1]
     final maxVal = flat.map((v) => v.abs()).reduce(max);
     if (maxVal > 0) {
-      for (int i = 0; i < flat.length; i++) {
-        flat[i] /= maxVal;
-      }
+      for (int i = 0; i < flat.length; i++) flat[i] /= maxVal;
     }
 
     return flat;
@@ -212,12 +230,13 @@ class ModelService extends ChangeNotifier {
 
   @override
   void dispose() {
-    _interpreter?.close();
+    _landmarkInterpreter?.close();
+    _classifierInterpreter?.close();
     super.dispose();
   }
 }
 
-// ─── Result model ─────────────────────────────────────────────────────────────
+// ─── Result ───────────────────────────────────────────────────────────────────
 
 class DetectionResult {
   final int classIndex;
