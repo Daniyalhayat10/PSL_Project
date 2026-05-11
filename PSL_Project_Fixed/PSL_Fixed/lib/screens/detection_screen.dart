@@ -11,34 +11,39 @@ import '../services/detection_provider.dart';
 
 class DetectionScreen extends StatefulWidget {
   const DetectionScreen({super.key});
-  @override
-  State<DetectionScreen> createState() => _DetectionScreenState();
+  @override State<DetectionScreen> createState() => _DetectionScreenState();
 }
 
 class _DetectionScreenState extends State<DetectionScreen>
     with WidgetsBindingObserver, TickerProviderStateMixin {
 
+  // Camera
   CameraController? _cam;
   List<CameraDescription> _cameras = [];
   int _camIdx = 1;
   bool _hasPermission = false;
-  bool _streamActive = false;
-  bool _busy = false;
-  int _frameCount = 0;
-  static const int _skip = 4;
+  bool _streamActive  = false;
+  bool _busy          = false;
+  int  _frameCount    = 0;
+  static const int _skip = 5;
 
+  // TTS
   FlutterTts? _tts;
   bool _ttsOn = true;
   String? _lastSpoken;
 
-  bool _handFound = false;
-  String _status = 'ہاتھ باکس میں رکھیں';
-  int _processed = 0;
+  // State
+  bool   _handFound  = false;
+  String _status     = 'Place your hand in the frame';
+  int    _processed  = 0;
 
+  // Animations
   late AnimationController _pulseCtrl;
-  late Animation<double> _pulse;
   late AnimationController _letterCtrl;
-  late Animation<double> _letterAnim;
+  late AnimationController _glowCtrl;
+  late Animation<double>   _pulseAnim;
+  late Animation<double>   _letterAnim;
+  late Animation<double>   _glowAnim;
 
   @override
   void initState() {
@@ -46,13 +51,19 @@ class _DetectionScreenState extends State<DetectionScreen>
     WidgetsBinding.instance.addObserver(this);
 
     _pulseCtrl = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 1500))..repeat(reverse: true);
-    _pulse = Tween(begin: 0.95, end: 1.05).animate(
+        duration: const Duration(milliseconds: 1800))..repeat(reverse: true);
+    _pulseAnim = Tween(begin: 1.0, end: 1.04).animate(
         CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
 
     _letterCtrl = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 400));
-    _letterAnim = CurvedAnimation(parent: _letterCtrl, curve: Curves.elasticOut);
+        duration: const Duration(milliseconds: 500));
+    _letterAnim = CurvedAnimation(parent: _letterCtrl,
+        curve: Curves.elasticOut);
+
+    _glowCtrl = AnimationController(vsync: this,
+        duration: const Duration(milliseconds: 1200))..repeat(reverse: true);
+    _glowAnim = Tween(begin: 0.3, end: 0.8).animate(
+        CurvedAnimation(parent: _glowCtrl, curve: Curves.easeInOut));
 
     _initTTS();
     _requestAndInit();
@@ -66,6 +77,7 @@ class _DetectionScreenState extends State<DetectionScreen>
     _tts = FlutterTts();
     await _tts?.setLanguage('ur-PK');
     await _tts?.setSpeechRate(0.5);
+    await _tts?.setVolume(1.0);
   }
 
   Future<void> _requestAndInit() async {
@@ -111,12 +123,12 @@ class _DetectionScreenState extends State<DetectionScreen>
     _frameCount++;
     if (_frameCount % _skip != 0 || _busy) return;
     _busy = true;
-    _processFrame(raw);
+    _process(raw);
   }
 
-  Future<void> _processFrame(CameraImage raw) async {
+  Future<void> _process(CameraImage raw) async {
     try {
-      final frame = _toImage(raw);
+      final frame = _toImg(raw);
       if (frame == null) return;
       setState(() => _processed++);
       final model = context.read<ModelService>();
@@ -126,478 +138,447 @@ class _DetectionScreenState extends State<DetectionScreen>
       if (result != null) {
         context.read<DetectionProvider>().updateDetection(result);
         if (!_handFound) _letterCtrl.forward(from: 0);
-        setState(() {
-          _handFound = true;
-          _status = '${result.romanLabel}  ${result.confidencePercent}';
-        });
-        if (_ttsOn && result.isHighConfidence && result.romanLabel != _lastSpoken) {
+        setState(() { _handFound = true; _status = result.romanLabel; });
+        if (_ttsOn && result.isHighConfidence &&
+            result.romanLabel != _lastSpoken) {
           _lastSpoken = result.romanLabel;
           _tts?.speak(result.urduLabel);
         }
       } else {
-        setState(() {
-          _handFound = false;
-          _status = 'ہاتھ باکس میں رکھیں';
-        });
+        setState(() { _handFound = false; _status = 'Place your hand in the frame'; });
       }
-    } catch (e) { debugPrint('❌ frame: $e'); }
+    } catch (e) { debugPrint('❌ process: $e'); }
     finally { _busy = false; }
   }
 
-  img.Image? _toImage(CameraImage c) {
+  img.Image? _toImg(CameraImage c) {
     try { return Platform.isAndroid ? _yuv(c) : _bgra(c); }
-    catch (e) { return null; }
+    catch (_) { return null; }
   }
 
   img.Image _yuv(CameraImage c) {
     final out = img.Image(width: c.width, height: c.height);
-    final yp = c.planes[0], up = c.planes[1], vp = c.planes[2];
-    for (int y = 0; y < c.height; y++) {
-      for (int x = 0; x < c.width; x++) {
-        final yi = y * yp.bytesPerRow + x;
-        final ui = (y ~/ 2) * up.bytesPerRow + (x ~/ 2) * up.bytesPerPixel!;
-        final yv = yp.bytes[yi], u = up.bytes[ui], v = vp.bytes[ui];
-        out.setPixelRgb(x, y,
-          (yv + 1.402*(v-128)).round().clamp(0,255),
-          (yv - 0.344136*(u-128) - 0.714136*(v-128)).round().clamp(0,255),
-          (yv + 1.772*(u-128)).round().clamp(0,255));
+    final yp=c.planes[0]; final up=c.planes[1]; final vp=c.planes[2];
+    for (int y=0;y<c.height;y++) {
+      for (int x=0;x<c.width;x++) {
+        final yi=y*yp.bytesPerRow+x;
+        final ui=(y~/2)*up.bytesPerRow+(x~/2)*up.bytesPerPixel!;
+        final yv=yp.bytes[yi]; final u=up.bytes[ui]; final v=vp.bytes[ui];
+        out.setPixelRgb(x,y,
+          (yv+1.402*(v-128)).round().clamp(0,255),
+          (yv-0.344136*(u-128)-0.714136*(v-128)).round().clamp(0,255),
+          (yv+1.772*(u-128)).round().clamp(0,255));
       }
     }
     return out;
   }
 
   img.Image _bgra(CameraImage c) => img.Image.fromBytes(
-      width: c.width, height: c.height,
-      bytes: c.planes[0].bytes.buffer,
-      format: img.Format.uint8, order: img.ChannelOrder.bgra);
+      width:c.width, height:c.height,
+      bytes:c.planes[0].bytes.buffer,
+      format:img.Format.uint8, order:img.ChannelOrder.bgra);
 
   Future<void> _switchCam() async {
     if (_cameras.length < 2) return;
-    _camIdx = (_camIdx + 1) % _cameras.length;
+    _camIdx = (_camIdx+1)%_cameras.length;
     await _startCamera(_camIdx);
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState s) {
-    if (s == AppLifecycleState.inactive) _stopStream();
-    else if (s == AppLifecycleState.resumed && _cameras.isNotEmpty) _startCamera(_camIdx);
+    if (s==AppLifecycleState.inactive) _stopStream();
+    else if (s==AppLifecycleState.resumed && _cameras.isNotEmpty) _startCamera(_camIdx);
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _stopStream(); _cam?.dispose();
-    _tts?.stop();
-    _pulseCtrl.dispose(); _letterCtrl.dispose();
+    _stopStream(); _cam?.dispose(); _tts?.stop();
+    _pulseCtrl.dispose(); _letterCtrl.dispose(); _glowCtrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F4FF),
-      body: SafeArea(
-        child: Stack(children: [
-          _buildCamera(),
-          _buildAnimatedGuideBox(),
-          _buildTopBar(),
-          _buildStatusChip(),
-          Positioned(bottom: 0, left: 0, right: 0, child: _buildBottomSheet()),
-        ]),
-      ),
+      backgroundColor: Colors.black,
+      body: SafeArea(child: Stack(children: [
+        _buildCameraView(),
+        _buildGuideBox(),
+        _buildTopGradient(),
+        _buildTopBar(),
+        _buildStatusBadge(),
+        Positioned(bottom:0, left:0, right:0, child: _buildBottomPanel()),
+      ])),
     );
   }
 
-  Widget _buildCamera() {
+  Widget _buildCameraView() {
     if (!_hasPermission) {
       return Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft, end: Alignment.bottomRight,
-            colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
-          ),
-        ),
+        decoration: const BoxDecoration(gradient: LinearGradient(
+          begin: Alignment.topLeft, end: Alignment.bottomRight,
+          colors: [Color(0xFF1a1a2e), Color(0xFF16213e)])),
         child: Center(child: Column(mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.videocam_off, color: Colors.white70, size: 72),
-            const SizedBox(height: 20),
-            const Text('Camera permission required',
-                style: TextStyle(color: Colors.white, fontSize: 16)),
-            const SizedBox(height: 20),
+            Container(padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(color: Colors.white.withOpacity(0.1),
+                  shape: BoxShape.circle),
+              child: const Icon(Icons.camera_alt_outlined, color: Colors.white70, size: 56)),
+            const SizedBox(height: 24),
+            const Text('Camera Access Required',
+                style: TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            const Text('Enable camera to detect sign language',
+                style: TextStyle(color: Colors.white54, fontSize: 14)),
+            const SizedBox(height: 28),
             ElevatedButton.icon(
               onPressed: _requestAndInit,
-              icon: const Icon(Icons.camera_alt),
-              label: const Text('Allow Camera'),
+              icon: const Icon(Icons.camera),
+              label: const Text('Enable Camera'),
               style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: const Color(0xFF667EEA),
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14)),
+                  backgroundColor: const Color(0xFF667EEA),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 14),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
             ),
           ])),
       );
     }
     if (_cam == null || !_cam!.value.isInitialized) {
-      return Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
-          ),
-        ),
-        child: const Center(
-            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)),
-      );
+      return Container(color: Colors.black,
+          child: const Center(child: CircularProgressIndicator(color: Color(0xFF667EEA))));
     }
-    return SizedBox.expand(
-      child: FittedBox(fit: BoxFit.cover,
-        child: SizedBox(
-          width: _cam!.value.previewSize!.height,
-          height: _cam!.value.previewSize!.width,
-          child: CameraPreview(_cam!),
-        )),
-    );
+    return SizedBox.expand(child: FittedBox(fit: BoxFit.cover,
+      child: SizedBox(
+        width: _cam!.value.previewSize!.height,
+        height: _cam!.value.previewSize!.width,
+        child: CameraPreview(_cam!))));
   }
 
-  Widget _buildAnimatedGuideBox() {
-    return Center(
-      child: AnimatedBuilder(
-        animation: _pulse,
-        builder: (_, __) => Transform.scale(
-          scale: _handFound ? 1.0 : _pulse.value,
-          child: Container(
-            width: 230, height: 230,
+  Widget _buildGuideBox() {
+    return Center(child: AnimatedBuilder(
+      animation: _pulseCtrl,
+      builder: (_, __) => ScaleTransition(
+        scale: _handFound ? const AlwaysStoppedAnimation(1.0) : _pulseAnim,
+        child: AnimatedBuilder(
+          animation: _glowAnim,
+          builder: (_, __) => Container(
+            width: 250, height: 250,
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
+              borderRadius: BorderRadius.circular(28),
               border: Border.all(
                 color: _handFound
                     ? const Color(0xFF00E676)
-                    : Colors.white.withOpacity(0.85),
-                width: _handFound ? 3.5 : 2,
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: _handFound
-                      ? const Color(0xFF00E676).withOpacity(0.4)
-                      : Colors.white.withOpacity(0.2),
-                  blurRadius: 20, spreadRadius: 2,
-                ),
-              ],
+                    : Colors.white.withOpacity(0.75),
+                width: _handFound ? 3 : 2),
+              boxShadow: [BoxShadow(
+                color: _handFound
+                    ? const Color(0xFF00E676).withOpacity(_glowAnim.value)
+                    : Colors.white.withOpacity(0.08),
+                blurRadius: _handFound ? 30 : 10, spreadRadius: 2)],
             ),
-            child: _handFound
-                ? null
-                : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    const Icon(Icons.back_hand_outlined,
-                        color: Colors.white70, size: 44),
-                    const SizedBox(height: 8),
-                    const Text('ہاتھ یہاں رکھیں',
-                        style: TextStyle(
-                            fontFamily: 'JameelNooriNastaleeq',
-                            color: Colors.white70, fontSize: 15),
-                        textDirection: TextDirection.rtl),
-                  ]),
+            child: _handFound ? null : Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.back_hand_outlined,
+                    color: Colors.white.withOpacity(0.6), size: 48),
+                const SizedBox(height: 10),
+                Text('Place hand here',
+                    style: TextStyle(color: Colors.white.withOpacity(0.6),
+                        fontSize: 13, letterSpacing: 0.5)),
+              ]),
           ),
         ),
       ),
-    );
+    ));
+  }
+
+  Widget _buildTopGradient() {
+    return Positioned(top:0, left:0, right:0,
+      child: Container(height: 120,
+        decoration: BoxDecoration(gradient: LinearGradient(
+          begin: Alignment.topCenter, end: Alignment.bottomCenter,
+          colors: [Colors.black.withOpacity(0.8), Colors.transparent]))));
   }
 
   Widget _buildTopBar() {
     return Positioned(top: 0, left: 0, right: 0,
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 8, 12, 16),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter, end: Alignment.bottomCenter,
-            colors: [Colors.black.withOpacity(0.65), Colors.transparent],
-          ),
-        ),
+      child: Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
         child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Row(children: [
-              _GlassBtn(icon: Icons.arrow_back_ios_new,
-                  onTap: () => Navigator.pop(context)),
-              if (_cameras.length > 1) ...[
-                const SizedBox(width: 8),
-                _GlassBtn(icon: Icons.flip_camera_ios, onTap: _switchCam),
-              ],
-            ]),
-            // Title
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+            _GlassButton(icon: Icons.arrow_back_ios_new,
+                onTap: () => Navigator.pop(context)),
+            // Title badge
+            Container(padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               decoration: BoxDecoration(
-                  color: Colors.black.withOpacity(0.4),
-                  borderRadius: BorderRadius.circular(20)),
-              child: const Text('PSL شناخت',
-                style: TextStyle(fontFamily: 'JameelNooriNastaleeq',
-                    color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
-                textDirection: TextDirection.rtl),
-            ),
+                color: Colors.black.withOpacity(0.45),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: Colors.white.withOpacity(0.2)),
+              ),
+              child: const Row(children: [
+                Icon(Icons.sign_language, color: Colors.white, size: 16),
+                SizedBox(width: 6),
+                Text('PSL Detector', style: TextStyle(color: Colors.white,
+                    fontSize: 14, fontWeight: FontWeight.w600)),
+              ])),
             Row(children: [
-              _GlassBtn(
+              _GlassButton(
                   icon: _ttsOn ? Icons.volume_up : Icons.volume_off,
                   onTap: () => setState(() => _ttsOn = !_ttsOn),
                   active: _ttsOn),
               const SizedBox(width: 8),
-              _GlassBtn(icon: Icons.delete_sweep, onTap: () {
-                context.read<DetectionProvider>().clearAll();
-                setState(() { _handFound = false; _status = 'ہاتھ باکس میں رکھیں'; });
-              }),
+              if (_cameras.length > 1)
+                _GlassButton(icon: Icons.flip_camera_ios, onTap: _switchCam),
             ]),
-          ]),
-      ));
+          ])));
   }
 
-  Widget _buildStatusChip() {
-    return Positioned(top: 76, left: 0, right: 0,
-      child: Center(
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 400),
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-          decoration: BoxDecoration(
-            color: _handFound
-                ? const Color(0xFF00E676).withOpacity(0.9)
-                : Colors.black.withOpacity(0.55),
-            borderRadius: BorderRadius.circular(30),
-            boxShadow: _handFound ? [
-              BoxShadow(color: const Color(0xFF00E676).withOpacity(0.4),
-                  blurRadius: 12),
-            ] : [],
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(_handFound ? Icons.check_circle : Icons.pan_tool_outlined,
-                color: _handFound ? Colors.white : Colors.white60, size: 16),
-            const SizedBox(width: 8),
-            Text(_status,
-                style: TextStyle(
-                    fontFamily: 'JameelNooriNastaleeq',
-                    color: _handFound ? Colors.white : Colors.white70,
-                    fontSize: 13, fontWeight: FontWeight.w600),
-                textDirection: TextDirection.rtl),
-          ]),
+  Widget _buildStatusBadge() {
+    return Positioned(top: 72, left: 0, right: 0,
+      child: Center(child: AnimatedContainer(
+        duration: const Duration(milliseconds: 400),
+        padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 8),
+        decoration: BoxDecoration(
+          color: _handFound
+              ? const Color(0xFF00C853).withOpacity(0.85)
+              : Colors.black.withOpacity(0.5),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: _handFound
+              ? const Color(0xFF00C853) : Colors.white24),
+          boxShadow: _handFound ? [BoxShadow(
+              color: const Color(0xFF00C853).withOpacity(0.4), blurRadius: 16)] : [],
         ),
-      ));
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          AnimatedContainer(duration: const Duration(milliseconds: 300),
+            width: 8, height: 8,
+            decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _handFound ? Colors.white : Colors.white54)),
+          const SizedBox(width: 8),
+          Text(_status, style: TextStyle(
+              color: _handFound ? Colors.white : Colors.white70,
+              fontSize: 13, fontWeight: FontWeight.w600)),
+        ]),
+      )));
   }
 
-  Widget _buildBottomSheet() {
+  Widget _buildBottomPanel() {
     return Consumer<DetectionProvider>(
       builder: (ctx, p, _) => Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: const Color(0xFF0f0f1a),
           borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.15),
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5),
               blurRadius: 20, offset: const Offset(0, -5))],
         ),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          // Handle
+          // Drag handle
           Container(margin: const EdgeInsets.only(top: 12),
-              width: 40, height: 4,
-              decoration: BoxDecoration(
-                  color: Colors.grey[300],
+              width: 36, height: 4,
+              decoration: BoxDecoration(color: Colors.white24,
                   borderRadius: BorderRadius.circular(2))),
-          const SizedBox(height: 12),
-          // Current detection
-          if (p.lastResult != null) _buildDetectionCard(p.lastResult!),
-          const SizedBox(height: 12),
-          // Word/Sentence display
-          _buildTextDisplay(p),
-          const SizedBox(height: 12),
-          // Actions
-          _buildActions(p),
           const SizedBox(height: 16),
+          // Current detection
+          if (p.lastResult != null) ...[
+            _buildLetterDisplay(p.lastResult!),
+            const SizedBox(height: 14),
+          ] else
+            _buildIdlePlaceholder(),
+          // Text output
+          _buildTextBox(p),
+          const SizedBox(height: 14),
+          // Action buttons
+          _buildActionRow(p),
+          const SizedBox(height: 18),
         ]),
       ),
     );
   }
 
-  Widget _buildDetectionCard(DetectionResult r) {
-    return ScaleTransition(
-      scale: _letterAnim,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        padding: const EdgeInsets.all(14),
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: r.isHighConfidence
-                ? [const Color(0xFF00C853).withOpacity(0.1), const Color(0xFF69F0AE).withOpacity(0.05)]
-                : [const Color(0xFFFFD600).withOpacity(0.1), const Color(0xFFFFEE58).withOpacity(0.05)],
-          ),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: r.confidenceColor.withOpacity(0.4), width: 1.5),
-        ),
-        child: Row(children: [
-          // Big Urdu letter
-          Container(
-            width: 80, height: 80,
+  Widget _buildLetterDisplay(DetectionResult r) {
+    return Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Row(children: [
+        // Animated Urdu letter
+        ScaleTransition(scale: _letterAnim,
+          child: Container(width: 80, height: 80,
             decoration: BoxDecoration(
               gradient: LinearGradient(
-                colors: [const Color(0xFF667EEA), const Color(0xFF764BA2)],
-                begin: Alignment.topLeft, end: Alignment.bottomRight,
-              ),
-              borderRadius: BorderRadius.circular(20),
+                  begin: Alignment.topLeft, end: Alignment.bottomRight,
+                  colors: r.isHighConfidence
+                      ? [const Color(0xFF00C853), const Color(0xFF00897B)]
+                      : [const Color(0xFFFFAB00), const Color(0xFFFF6F00)]),
+              borderRadius: BorderRadius.circular(22),
               boxShadow: [BoxShadow(
-                  color: const Color(0xFF667EEA).withOpacity(0.4),
-                  blurRadius: 12, offset: const Offset(0, 4))],
-            ),
+                  color: (r.isHighConfidence
+                      ? const Color(0xFF00C853) : const Color(0xFFFFAB00)).withOpacity(0.4),
+                  blurRadius: 16, offset: const Offset(0, 4))]),
             child: Center(child: Text(r.urduLabel,
-                style: const TextStyle(
-                    fontFamily: 'JameelNooriNastaleeq',
+                style: const TextStyle(fontFamily: 'JameelNooriNastaleeq',
                     color: Colors.white, fontSize: 40),
-                textDirection: TextDirection.rtl)),
-          ),
-          const SizedBox(width: 14),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(r.romanLabel,
-                  style: const TextStyle(fontSize: 18,
-                      fontWeight: FontWeight.bold, color: Color(0xFF1A1A2E))),
-              const SizedBox(height: 4),
-              Row(children: [
-                Expanded(child: ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: LinearProgressIndicator(
-                      value: r.confidence,
-                      backgroundColor: Colors.grey[200],
-                      color: r.confidenceColor, minHeight: 8),
-                )),
-                const SizedBox(width: 8),
-                Text(r.confidencePercent,
-                    style: TextStyle(color: r.confidenceColor,
-                        fontWeight: FontWeight.bold, fontSize: 13)),
-              ]),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                decoration: BoxDecoration(
-                    color: r.isHighConfidence
-                        ? const Color(0xFF00C853).withOpacity(0.1)
-                        : const Color(0xFFFFD600).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10)),
-                child: Text(
-                    r.isHighConfidence ? '✓ High Confidence' : '~ Medium',
-                    style: TextStyle(fontSize: 11,
-                        color: r.isHighConfidence
-                            ? const Color(0xFF00C853)
-                            : const Color(0xFFF9A825),
-                        fontWeight: FontWeight.w600)),
-              ),
-            ])),
+                textDirection: TextDirection.rtl)))),
+        const SizedBox(width: 16),
+        // Info
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(r.romanLabel, style: const TextStyle(color: Colors.white,
+                fontSize: 20, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 6),
+            // Confidence bar
+            Row(children: [
+              Expanded(child: ClipRRect(borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(value: r.confidence,
+                    backgroundColor: Colors.white12,
+                    color: r.confidenceColor, minHeight: 7))),
+              const SizedBox(width: 8),
+              Text(r.confidencePercent, style: TextStyle(color: r.confidenceColor,
+                  fontSize: 12, fontWeight: FontWeight.bold)),
+            ]),
+            const SizedBox(height: 6),
+            Row(children: [
+              Container(width: 6, height: 6,
+                  decoration: BoxDecoration(shape: BoxShape.circle,
+                      color: r.confidenceColor)),
+              const SizedBox(width: 5),
+              Text(r.isHighConfidence ? 'High confidence' : 'Medium confidence',
+                  style: TextStyle(color: r.confidenceColor, fontSize: 11)),
+            ]),
+          ])),
+        // Top 3 quick list
+        Column(children: [
+          for (int i = 0; i < 3 && i < r.allProbabilities.length; i++) ...[
+            if (i > 0) const SizedBox(height: 4),
+            _MiniLabel(
+                label: i < ModelService.romanLabels.length
+                    ? ModelService.romanLabels[i] : '?',
+                pct: (r.allProbabilities[i] * 100).toStringAsFixed(0)),
+          ],
         ]),
-      ),
-    );
+      ]));
   }
 
-  Widget _buildTextDisplay(DetectionProvider p) {
+  Widget _buildIdlePlaceholder() {
+    return Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: Container(height: 80, padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(color: Colors.white.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white12)),
+        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+          Icon(Icons.waving_hand, color: Colors.white24, size: 28),
+          const SizedBox(width: 12),
+          Column(mainAxisAlignment: MainAxisAlignment.center,
+            crossAxisAlignment: CrossAxisAlignment.start, children: [
+            const Text('Waiting for gesture...',
+                style: TextStyle(color: Colors.white54, fontSize: 14)),
+            Text('Frames: $_processed',
+                style: const TextStyle(color: Colors.white30, fontSize: 10)),
+          ]),
+        ])));
+  }
+
+  Widget _buildTextBox(DetectionProvider p) {
     final text = p.fullText;
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16),
+    return Container(margin: const EdgeInsets.symmetric(horizontal: 16),
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: const Color(0xFFF8F9FF),
+        color: Colors.white.withOpacity(0.07),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFFE0E7FF), width: 1.5),
-      ),
+        border: Border.all(color: Colors.white.withOpacity(0.1))),
       child: Column(children: [
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-            decoration: BoxDecoration(
-                color: const Color(0xFF667EEA).withOpacity(0.1),
-                borderRadius: BorderRadius.circular(10)),
-            child: Text('${p.detectionCount} detections',
-                style: const TextStyle(color: Color(0xFF667EEA),
-                    fontSize: 11, fontWeight: FontWeight.w600)),
-          ),
-          const Text('شناخت شدہ متن',
-              style: TextStyle(fontFamily: 'JameelNooriNastaleeq',
-                  color: Color(0xFF764BA2), fontSize: 13,
-                  fontWeight: FontWeight.bold),
-              textDirection: TextDirection.rtl),
+          Text('${p.detectionCount} detections',
+              style: const TextStyle(color: Colors.white38, fontSize: 11)),
+          const Text('Detected Text',
+              style: TextStyle(color: Colors.white54, fontSize: 11,
+                  fontWeight: FontWeight.w600)),
         ]),
-        const SizedBox(height: 10),
-        Container(
-          width: double.infinity, padding: const EdgeInsets.all(12),
+        const SizedBox(height: 8),
+        Container(width: double.infinity, padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
-              color: Colors.white,
+              color: Colors.white.withOpacity(0.05),
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: const Color(0xFFE0E7FF))),
-          child: Text(text.isEmpty ? '...' : text,
+              border: Border.all(color: Colors.white12)),
+          child: Text(text.isEmpty ? '— — —' : text,
               style: const TextStyle(fontFamily: 'JameelNooriNastaleeq',
-                  color: Color(0xFF1A1A2E), fontSize: 28),
+                  color: Colors.white, fontSize: 26, height: 1.4),
               textDirection: TextDirection.rtl,
-              textAlign: TextAlign.center),
-        ),
-      ]),
-    );
+              textAlign: TextAlign.center)),
+      ]));
   }
 
-  Widget _buildActions(DetectionProvider p) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+  Widget _buildActionRow(DetectionProvider p) {
+    return Padding(padding: const EdgeInsets.symmetric(horizontal: 16),
       child: Row(children: [
-        _ActionChip(label: 'Space', icon: Icons.space_bar,
-            color: const Color(0xFF667EEA), onTap: p.addSpaceToWord),
+        _ActionBtn(icon: Icons.space_bar, label: 'Space',
+            color: const Color(0xFF667EEA),
+            onTap: p.addSpaceToWord),
         const SizedBox(width: 8),
-        _ActionChip(label: 'Undo', icon: Icons.backspace_outlined,
-            color: const Color(0xFF764BA2), onTap: p.undoLastLetter),
+        _ActionBtn(icon: Icons.backspace_outlined, label: 'Undo',
+            color: const Color(0xFF9C27B0),
+            onTap: p.undoLastLetter),
         const SizedBox(width: 8),
-        _ActionChip(label: 'Speak', icon: Icons.record_voice_over,
-            color: const Color(0xFF00BCD4), onTap: () async {
-          final t = p.fullText;
-          if (t.isNotEmpty) await _tts?.speak(t);
-        }),
+        _ActionBtn(icon: Icons.record_voice_over, label: 'Speak',
+            color: const Color(0xFF00BCD4),
+            onTap: () async {
+              final t = p.fullText;
+              if (t.isNotEmpty) await _tts?.speak(t);
+            }),
         const SizedBox(width: 8),
-        _ActionChip(label: 'Clear', icon: Icons.clear_all,
-            color: const Color(0xFFE91E63), onTap: () {
-          p.clearAll();
-          setState(() { _handFound = false; _status = 'ہاتھ باکس میں رکھیں'; });
-        }),
-      ]),
-    );
+        _ActionBtn(icon: Icons.clear_all, label: 'Clear',
+            color: const Color(0xFFE91E63),
+            onTap: () {
+              p.clearAll();
+              setState(() { _handFound=false; _status='Place your hand in the frame'; });
+            }),
+      ]));
   }
 }
 
-// ── Small widgets ─────────────────────────────────────────────────────────────
+// ── Small widgets ──────────────────────────────────────────────────────────────
 
-class _GlassBtn extends StatelessWidget {
-  final IconData icon;
-  final VoidCallback onTap;
-  final bool active;
-  const _GlassBtn({required this.icon, required this.onTap, this.active = true});
+class _GlassButton extends StatelessWidget {
+  final IconData icon; final VoidCallback onTap; final bool active;
+  const _GlassButton({required this.icon, required this.onTap, this.active=true});
   @override
   Widget build(BuildContext context) => GestureDetector(onTap: onTap,
-    child: Container(
-      padding: const EdgeInsets.all(10),
+    child: Container(padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-          color: Colors.white.withOpacity(0.2),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: Colors.white.withOpacity(0.4)),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1),
-              blurRadius: 8)]),
-      child: Icon(icon, color: active ? Colors.white : Colors.white54, size: 20)));
+        color: Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.3)),
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.2), blurRadius: 8)]),
+      child: Icon(icon, color: active ? Colors.white : Colors.white38, size: 20)));
 }
 
-class _ActionChip extends StatelessWidget {
-  final String label;
-  final IconData icon;
-  final Color color;
-  final VoidCallback onTap;
-  const _ActionChip({required this.label, required this.icon,
+class _ActionBtn extends StatelessWidget {
+  final IconData icon; final String label;
+  final Color color; final VoidCallback onTap;
+  const _ActionBtn({required this.icon, required this.label,
       required this.color, required this.onTap});
   @override
   Widget build(BuildContext context) => Expanded(
     child: GestureDetector(onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 12),
+      child: Container(padding: const EdgeInsets.symmetric(vertical: 12),
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-              colors: [color.withOpacity(0.15), color.withOpacity(0.05)]),
+          color: color.withOpacity(0.18),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: color.withOpacity(0.3)),
-        ),
+          border: Border.all(color: color.withOpacity(0.35))),
         child: Column(children: [
           Icon(icon, color: color, size: 22),
-          const SizedBox(height: 3),
+          const SizedBox(height: 4),
           Text(label, style: TextStyle(color: color, fontSize: 10,
               fontWeight: FontWeight.w700)),
-        ]),
-      )));
+        ]))));
+}
+
+class _MiniLabel extends StatelessWidget {
+  final String label, pct;
+  const _MiniLabel({required this.label, required this.pct});
+  @override
+  Widget build(BuildContext context) => Container(
+    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+    decoration: BoxDecoration(color: Colors.white.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(8)),
+    child: Text('$label $pct%',
+        style: const TextStyle(color: Colors.white54, fontSize: 9)));
 }
