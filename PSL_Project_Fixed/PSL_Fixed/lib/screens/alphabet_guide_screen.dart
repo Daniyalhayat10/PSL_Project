@@ -2,408 +2,438 @@ import 'package:flutter/material.dart';
 
 class AlphabetGuideScreen extends StatefulWidget {
   const AlphabetGuideScreen({super.key});
-  @override
-  State<AlphabetGuideScreen> createState() => _AlphabetGuideScreenState();
+  @override State<AlphabetGuideScreen> createState() => _AlphabetGuideScreenState();
 }
 
 class _AlphabetGuideScreenState extends State<AlphabetGuideScreen>
-    with TickerProviderStateMixin {
-  int? _expanded;
-  late AnimationController _headerCtrl;
-  late Animation<double> _headerAnim;
+    with SingleTickerProviderStateMixin {
   String _search = '';
+  int? _selected;
+  late TabController _tab;
 
+  // Signs ordered exactly as in the dataset image
   static const List<Map<String, dynamic>> _signs = [
-    {'urdu':'ا','roman':'Alif',   'desc':'Open hand, all fingers extended upward — palm faces forward','color1':0xFF667EEA,'color2':0xFF764BA2,'fingers':'11111'},
-    {'urdu':'ب','roman':'Bay',    'desc':'Index finger pointing straight up, rest closed','color1':0xFFFF6B6B,'color2':0xFFEE5A24,'fingers':'01000'},
-    {'urdu':'پ','roman':'Pay',    'desc':'Index and middle fingers spread in V shape upward','color1':0xFF26de81,'color2':0xFF20bf6b,'fingers':'01100'},
-    {'urdu':'ت','roman':'Tay',    'desc':'Three fingers (index, middle, ring) up together','color1':0xFFfd9644,'color2':0xFFe55039,'fingers':'01110'},
-    {'urdu':'ٹ','roman':'Taay',   'desc':'Three fingers bent/curled slightly forward','color1':0xFFa55eea,'color2':0xFF8854d0,'fingers':'01110'},
-    {'urdu':'ث','roman':'Say',    'desc':'Four fingers spread wide, thumb tucked in','color1':0xFF2bcbba,'color2':0xFF0fb9b1,'fingers':'11110'},
-    {'urdu':'ج','roman':'Jeem',   'desc':'Index and middle fingers form a V, rest closed','color1':0xFFFC427A,'color2':0xFFfd79a8,'fingers':'01100'},
-    {'urdu':'چ','roman':'Chay',   'desc':'Curved index finger pointing sideways','color1':0xFF4b7bec,'color2':0xFF3867d6,'fingers':'01000'},
-    {'urdu':'ح','roman':'Hay',    'desc':'Open palm facing outward, fingers together','color1':0xFF20bf6b,'color2':0xFF0be881,'fingers':'11111'},
-    {'urdu':'خ','roman':'Khay',   'desc':'Open palm facing inward toward chest','color1':0xFFf7b731,'color2':0xFFfed330,'fingers':'11111'},
-    {'urdu':'د','roman':'Daal',   'desc':'Thumb and index finger form a circle (OK sign)','color1':0xFFfc5c65,'color2':0xFFeb3b5a,'fingers':'10001'},
-    {'urdu':'ڈ','roman':'Dal Drwaza','desc':'Thumb and index pinch together, others spread','color1':0xFF2d98da,'color2':0xFF0a3d62,'fingers':'10001'},
-    {'urdu':'ذ','roman':'Zaal',   'desc':'Index finger pointing sideways/horizontally','color1':0xFFe55039,'color2':0xFFc0392b,'fingers':'01000'},
-    {'urdu':'ر','roman':'Ray',    'desc':'Index finger curved/pointing downward','color1':0xFF8e44ad,'color2':0xFF6c3483,'fingers':'01000'},
-    {'urdu':'ڑ','roman':'Rdy',    'desc':'Index and middle fingers pointing down','color1':0xFF16a085,'color2':0xFF1abc9c,'fingers':'01100'},
-    {'urdu':'ز','roman':'Zay',    'desc':'Closed fist with pinky finger raised up','color1':0xFF2980b9,'color2':0xFF3498db,'fingers':'00001'},
-    {'urdu':'س','roman':'Say2',   'desc':'Three fingers pointing sideways','color1':0xFFd35400,'color2':0xFFe67e22,'fingers':'01110'},
-    {'urdu':'ش','roman':'Sheen',  'desc':'Four fingers waving/spread sideways','color1':0xFF27ae60,'color2':0xFF2ecc71,'fingers':'01111'},
-    {'urdu':'ص','roman':'Suaad',  'desc':'Thumb crosses over closed palm','color1':0xFFc0392b,'color2':0xFFe74c3c,'fingers':'10000'},
-    {'urdu':'ض','roman':'Duaad',  'desc':'Thumb and pinky both extended out','color1':0xFF8e44ad,'color2':0xFF9b59b6,'fingers':'10001'},
-    {'urdu':'ط','roman':'Tua',    'desc':'All fingers curled inward into fist','color1':0xFF2c3e50,'color2':0xFF34495e,'fingers':'00000'},
-    {'urdu':'ظ','roman':'Zua',    'desc':'Wrist bent forward, fingers curled','color1':0xFF16a085,'color2':0xFF1abc9c,'fingers':'00000'},
-    {'urdu':'ع','roman':'Ain',    'desc':'Ring and middle fingers crossed over each other','color1':0xFFe74c3c,'color2':0xFFc0392b,'fingers':'01110'},
-    {'urdu':'غ','roman':'Gaaf',   'desc':'Index finger pointing up with slight curve','color1':0xFF2980b9,'color2':0xFF1a5276,'fingers':'01000'},
-    {'urdu':'ف','roman':'Fay',    'desc':'All fingers pinched together at tips (beak)','color1':0xFFf39c12,'color2':0xFFd35400,'fingers':'11111'},
-    {'urdu':'ق','roman':'Kaaf',   'desc':'Index and middle fingers together, bent at knuckle','color1':0xFF6c3483,'color2':0xFF8e44ad,'fingers':'01100'},
-    {'urdu':'ک','roman':'Kaaf',   'desc':'Index finger bent like a hook','color1':0xFF1a5276,'color2':0xFF2980b9,'fingers':'01000'},
-    {'urdu':'گ','roman':'Gaaf',   'desc':'Pointing index with thumb out to side','color1':0xFF117a65,'color2':0xFF16a085,'fingers':'11000'},
-    {'urdu':'ل','roman':'Laam',   'desc':'L-shape: index up, thumb out sideways','color1':0xFF922b21,'color2':0xFFc0392b,'fingers':'11000'},
-    {'urdu':'م','roman':'Meem',   'desc':'Thumb tucked under curved fingers','color1':0xFF1f618d,'color2':0xFF2e86c1,'fingers':'00000'},
-    {'urdu':'ن','roman':'Noon',   'desc':'Index finger bent into hook shape facing down','color1':0xFF196f3d,'color2':0xFF27ae60,'fingers':'01000'},
-    {'urdu':'و','roman':'Wow',    'desc':'Closed fist with thumb pointing sideways','color1':0xFF7d6608,'color2':0xFFf39c12,'fingers':'10000'},
-    {'urdu':'ہ','roman':'Hay2',   'desc':'Open palm facing up like holding something','color1':0xFF4a235a,'color2':0xFF7d3c98,'fingers':'11111'},
-    {'urdu':'ء','roman':'Hamza',  'desc':'Index and thumb form a small circle','color1':0xFF154360,'color2':0xFF1f618d,'fingers':'11000'},
-    {'urdu':'ی','roman':'Yaay',   'desc':'Pinky finger raised, others closed','color1':0xFF0e6655,'color2':0xFF17a589,'fingers':'00001'},
-    {'urdu':'ے','roman':'Bari Yay','desc':'Index and pinky both raised (horns shape)','color1':0xFF6e2f1a,'color2':0xFFca6f1e,'fingers':'01001'},
-    {'urdu':'أ','roman':'Alif Hamza','desc':'Open hand slightly tilted with thumb out','color1':0xFF512e5f,'color2':0xFF8e44ad,'fingers':'11111'},
+    // Row 1 from dataset
+    {'u':'ا','r':'Alif',   'g':'Open hand, all fingers straight up, palm forward','f':'11111','c':[0xFF667EEA,0xFF764BA2]},
+    {'u':'ب','r':'Bay',    'g':'Flat hand held horizontally, thumb tucked under fingers','f':'01111','c':[0xFFFF6B6B,0xFFEE5A24]},
+    {'u':'پ','r':'Pay',    'g':'Flat hand, three fingers extended, wrist bent down','f':'01110','c':[0xFF26de81,0xFF20bf6b]},
+    {'u':'ت','r':'Tay',    'g':'Two fingers (index+middle) pointing up, others closed','f':'01100','c':[0xFFfd9644,0xFFe55039]},
+    {'u':'ٹ','r':'Taay',   'g':'Closed fist with thumb on side pointing up','f':'10000','c':[0xFFa55eea,0xFF8854d0]},
+    {'u':'ث','r':'Say',    'g':'Three fingers (index+middle+ring) spread upward','f':'01110','c':[0xFF2bcbba,0xFF0fb9b1]},
+    {'u':'ج','r':'Jeem',   'g':'Index+middle fingers hooked/curved forward','f':'01100','c':[0xFFFC427A,0xFFfd79a8]},
+    {'u':'چ','r':'Chay',   'g':'Index finger curved like a C, others closed','f':'01000','c':[0xFF4b7bec,0xFF3867d6]},
+    {'u':'ح','r':'Hay',    'g':'Open palm facing outward, all fingers together','f':'11111','c':[0xFF20bf6b,0xFF0be881]},
+    {'u':'خ','r':'Khay',   'g':'Open palm facing inward, fingers spread wide','f':'11111','c':[0xFFf7b731,0xFFfed330]},
+    // Row 2 from dataset
+    {'u':'د','r':'Daal',   'g':'Index finger pointing sideways/left, fist closed','f':'01000','c':[0xFFfc5c65,0xFFeb3b5a]},
+    {'u':'ڈ','r':'Dal Drwaza','g':'Thumb and index form D-shape, others closed','f':'11000','c':[0xFF2d98da,0xFF0a3d62]},
+    {'u':'ذ','r':'Zaal',   'g':'Closed fist, index finger pointing forward-down','f':'01000','c':[0xFFe55039,0xFFc0392b]},
+    {'u':'ر','r':'Ray',    'g':'Index finger hooked/bent pointing down-right','f':'01000','c':[0xFF8e44ad,0xFF6c3483]},
+    {'u':'ڑ','r':'Rdy',    'g':'Index+middle bent/hooked together downward','f':'01100','c':[0xFF16a085,0xFF1abc9c]},
+    {'u':'ز','r':'Zay',    'g':'Index finger straight up, thumb out (pistol shape)','f':'11000','c':[0xFF2980b9,0xFF3498db]},
+    {'u':'س','r':'Say2',   'g':'Three fingers (index+middle+ring) pointing sideways','f':'01110','c':[0xFFd35400,0xFFe67e22]},
+    {'u':'ش','r':'Sheen',  'g':'Three fingers spread wide and waving/fanned out','f':'01110','c':[0xFF27ae60,0xFF2ecc71]},
+    {'u':'ص','r':'Suaad',  'g':'Thumb crosses palm, index pointing, others curled','f':'11000','c':[0xFFc0392b,0xFFe74c3c]},
+    // Row 3 from dataset
+    {'u':'ض','r':'Duaad',  'g':'Thumb+pinky extended, middle fingers closed (horns)','f':'10001','c':[0xFF8e44ad,0xFF9b59b6]},
+    {'u':'ط','r':'Tua',    'g':'Closed fist facing forward (all fingers curled)','f':'00000','c':[0xFF2c3e50,0xFF34495e]},
+    {'u':'ظ','r':'Zua',    'g':'Fist with wrist bent, back of hand forward','f':'00000','c':[0xFF16a085,0xFF1abc9c]},
+    {'u':'ع','r':'Ain',    'g':'Index+middle+ring fingers crossed/overlapping','f':'01110','c':[0xFFe74c3c,0xFFc0392b]},
+    {'u':'غ','r':'Gaaf',   'g':'Index finger bent, pointing sideways with knuckle','f':'01000','c':[0xFF2980b9,0xFF1a5276]},
+    {'u':'ف','r':'Fay',    'g':'All five fingers pinched at tips (beak/bunch)','f':'11111','c':[0xFFf39c12,0xFFd35400]},
+    {'u':'ق','r':'Qaaf',   'g':'V-sign (index+middle up), thumb touches ring','f':'01100','c':[0xFF6c3483,0xFF8e44ad]},
+    {'u':'ک','r':'Kaaf',   'g':'Index bent like hook/L pointing sideways','f':'01000','c':[0xFF1a5276,0xFF2980b9]},
+    {'u':'گ','r':'Gaaf2',  'g':'Index+thumb extended (L-shape), others closed','f':'11000','c':[0xFF117a65,0xFF16a085]},
+    {'u':'ل','r':'Laam',   'g':'L-shape: index up, thumb out to the side','f':'11000','c':[0xFF922b21,0xFFc0392b]},
+    // Row 4 from dataset
+    {'u':'م','r':'Meem',   'g':'Closed fist, thumb tucked under curled fingers','f':'00000','c':[0xFF1f618d,0xFF2e86c1]},
+    {'u':'ن','r':'Noon',   'g':'Index finger pointing forward/slightly curved','f':'01000','c':[0xFF196f3d,0xFF27ae60]},
+    {'u':'و','r':'Wow',    'g':'Closed fist, thumb pointing to the side','f':'10000','c':[0xFF7d6608,0xFFf39c12]},
+    {'u':'ہ','r':'Hay2',   'g':'Open palm facing upward, all fingers relaxed','f':'11111','c':[0xFF4a235a,0xFF7d3c98]},
+    {'u':'ع','r':'Ain2',   'g':'Index finger pointing up with slight forward tilt','f':'01000','c':[0xFF154360,0xFF1f618d]},
+    {'u':'ی','r':'Yaay',   'g':'Pinky finger raised straight, all others closed','f':'00001','c':[0xFF0e6655,0xFF17a589]},
+    {'u':'ے','r':'Bari Yay','g':'Index+pinky raised (rock-sign), others closed','f':'01001','c':[0xFF6e2f1a,0xFFca6f1e]},
+    {'u':'أ','r':'Alif Hamza','g':'Open hand tilted with thumb raised slightly','f':'11111','c':[0xFF512e5f,0xFF8e44ad]},
   ];
 
-  List<Map<String, dynamic>> get _filtered => _search.isEmpty
-      ? _signs
-      : _signs.where((s) =>
-          s['roman'].toString().toLowerCase().contains(_search.toLowerCase()) ||
-          s['urdu'].toString().contains(_search)).toList();
+  List<Map<String,dynamic>> get _filtered => _search.isEmpty ? _signs
+      : _signs.where((s) => s['r'].toString().toLowerCase()
+          .contains(_search.toLowerCase()) || s['u'].toString().contains(_search)).toList();
 
   @override
   void initState() {
     super.initState();
-    _headerCtrl = AnimationController(vsync: this,
-        duration: const Duration(milliseconds: 600));
-    _headerAnim = CurvedAnimation(parent: _headerCtrl, curve: Curves.easeOut);
-    _headerCtrl.forward();
+    _tab = TabController(length: 2, vsync: this);
   }
 
   @override
-  void dispose() { _headerCtrl.dispose(); super.dispose(); }
+  void dispose() { _tab.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF0F4FF),
-      body: CustomScrollView(
-        slivers: [
-          _buildAppBar(),
-          SliverToBoxAdapter(child: _buildSearchBar()),
-          SliverPadding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-            sliver: SliverGrid(
-              delegate: SliverChildBuilderDelegate(
-                (ctx, i) => _buildSignCard(i),
-                childCount: _filtered.length,
-              ),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                mainAxisSpacing: 12,
-                crossAxisSpacing: 12,
-                childAspectRatio: 0.85,
-              ),
-            ),
-          ),
-        ],
+      backgroundColor: const Color(0xFF0f0f1a),
+      body: NestedScrollView(
+        headerSliverBuilder: (_, __) => [_buildAppBar()],
+        body: Column(children: [
+          _buildSearchBar(),
+          _buildTabBar(),
+          Expanded(child: TabBarView(controller: _tab, children: [
+            _buildGrid(),
+            _buildList(),
+          ])),
+        ]),
       ),
     );
   }
 
   Widget _buildAppBar() {
     return SliverAppBar(
-      expandedHeight: 160,
+      expandedHeight: 140,
       pinned: true,
-      backgroundColor: const Color(0xFF667EEA),
+      backgroundColor: const Color(0xFF0f0f1a),
       leading: IconButton(
         icon: const Icon(Icons.arrow_back_ios_new, color: Colors.white),
-        onPressed: () => Navigator.pop(context),
-      ),
+        onPressed: () => Navigator.pop(context)),
       flexibleSpace: FlexibleSpaceBar(
         background: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft, end: Alignment.bottomRight,
-              colors: [Color(0xFF667EEA), Color(0xFF764BA2)],
-            ),
-          ),
-          child: SafeArea(
-            child: FadeTransition(
-              opacity: _headerAnim,
-              child: Column(mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const SizedBox(height: 40),
-                  const Text('حروف تہجی رہنما',
-                    style: TextStyle(fontFamily: 'JameelNooriNastaleeq',
-                        color: Colors.white, fontSize: 26,
-                        fontWeight: FontWeight.bold),
-                    textDirection: TextDirection.rtl),
-                  const SizedBox(height: 6),
-                  Text('${_signs.length} Urdu Sign Language Gestures',
-                    style: const TextStyle(color: Colors.white70, fontSize: 13)),
-                ]),
-            ),
-          ),
-        ),
-        title: const Text('Alphabet Guide',
-          style: TextStyle(color: Colors.white, fontSize: 16,
-              fontWeight: FontWeight.bold)),
-        titlePadding: const EdgeInsets.only(left: 60, bottom: 16),
+          decoration: const BoxDecoration(gradient: LinearGradient(
+            begin: Alignment.topLeft, end: Alignment.bottomRight,
+            colors: [Color(0xFF1a1a3e), Color(0xFF0f0f1a)])),
+          child: SafeArea(child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 50, 20, 16),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.end, children: [
+              const Text('Sign Language Guide',
+                  style: TextStyle(color: Colors.white, fontSize: 22,
+                      fontWeight: FontWeight.bold)),
+              const SizedBox(height: 4),
+              Text('${_signs.length} Urdu PSL Gestures  •  Pakistan Sign Language',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12)),
+            ])))),
       ),
     );
   }
 
   Widget _buildSearchBar() {
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: const Color(0xFF667EEA).withOpacity(0.15),
-            blurRadius: 12, offset: const Offset(0, 4))],
-      ),
-      child: TextField(
-        onChanged: (v) => setState(() => _search = v),
-        decoration: InputDecoration(
-          hintText: 'Search letter... (e.g. Alif, Bay)',
-          hintStyle: const TextStyle(color: Colors.grey, fontSize: 14),
-          prefixIcon: const Icon(Icons.search, color: Color(0xFF667EEA)),
-          suffixIcon: _search.isNotEmpty
-              ? IconButton(icon: const Icon(Icons.clear, size: 18),
-                  onPressed: () => setState(() => _search = ''))
-              : null,
-          border: InputBorder.none,
-          contentPadding: const EdgeInsets.symmetric(vertical: 14),
-        ),
-      ),
+    return Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Container(
+        decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.08),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.white.withOpacity(0.12))),
+        child: TextField(
+          onChanged: (v) => setState(() { _search = v; }),
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'Search by name, e.g. Alif, Bay...',
+            hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+            prefixIcon: const Icon(Icons.search, color: Colors.white38),
+            suffixIcon: _search.isNotEmpty
+                ? IconButton(icon: const Icon(Icons.close, color: Colors.white38, size: 18),
+                    onPressed: () => setState(() => _search=''))
+                : null,
+            border: InputBorder.none,
+            contentPadding: const EdgeInsets.symmetric(vertical: 14)),
+        )));
+  }
+
+  Widget _buildTabBar() {
+    return Padding(padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Container(
+        decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.07),
+            borderRadius: BorderRadius.circular(14)),
+        child: TabBar(
+          controller: _tab,
+          indicator: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              gradient: const LinearGradient(
+                  colors: [Color(0xFF667EEA), Color(0xFF764BA2)])),
+          indicatorSize: TabBarIndicatorSize.tab,
+          dividerColor: Colors.transparent,
+          labelColor: Colors.white,
+          unselectedLabelColor: Colors.white38,
+          labelStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+          tabs: const [Tab(text: '  Grid View  '), Tab(text: '  List View  ')],
+        )));
+  }
+
+  Widget _buildGrid() {
+    return GridView.builder(
+      padding: const EdgeInsets.all(16),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount: 2, mainAxisSpacing: 12,
+          crossAxisSpacing: 12, childAspectRatio: 0.82),
+      itemCount: _filtered.length,
+      itemBuilder: (_, i) => _buildGridCard(i),
     );
   }
 
-  Widget _buildSignCard(int i) {
-    final sign = _filtered[i];
-    final c1 = Color(sign['color1'] as int);
-    final c2 = Color(sign['color2'] as int);
-    final isExpanded = _expanded == i;
+  Widget _buildList() {
+    return ListView.builder(
+      padding: const EdgeInsets.all(16),
+      itemCount: _filtered.length,
+      itemBuilder: (_, i) => _buildListCard(i),
+    );
+  }
+
+  Widget _buildGridCard(int i) {
+    final s = _filtered[i];
+    final c1 = Color((s['c'] as List)[0] as int);
+    final c2 = Color((s['c'] as List)[1] as int);
+    final sel = _selected == i;
 
     return GestureDetector(
-      onTap: () => setState(() => _expanded = isExpanded ? null : i),
+      onTap: () => setState(() => _selected = sel ? null : i),
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeInOut,
+        duration: const Duration(milliseconds: 250),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: const Color(0xFF1a1a2e),
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: c1.withOpacity(isExpanded ? 0.35 : 0.15),
-              blurRadius: isExpanded ? 20 : 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-          border: Border.all(
-            color: isExpanded ? c1.withOpacity(0.5) : Colors.transparent,
-            width: 2,
-          ),
+          border: Border.all(color: sel ? c1 : Colors.white.withOpacity(0.08),
+              width: sel ? 2 : 1),
+          boxShadow: sel ? [BoxShadow(color: c1.withOpacity(0.3),
+              blurRadius: 16, offset: const Offset(0, 4))] : [],
         ),
         child: Column(children: [
-          // Gradient header with hand drawing
-          Container(
-            height: 110,
+          // Header with gradient + hand drawing
+          Container(height: 105,
             decoration: BoxDecoration(
-              gradient: LinearGradient(
-                  begin: Alignment.topLeft, end: Alignment.bottomRight,
-                  colors: [c1, c2]),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(18)),
-            ),
+                gradient: LinearGradient(begin: Alignment.topLeft,
+                    end: Alignment.bottomRight, colors: [c1, c2]),
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(19))),
             child: Stack(children: [
-              // Background circles for depth
-              Positioned(right: -15, top: -15,
-                child: Container(width: 70, height: 70,
-                    decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withOpacity(0.1)))),
-              Positioned(left: -10, bottom: -10,
-                child: Container(width: 50, height: 50,
-                    decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: Colors.white.withOpacity(0.08)))),
-              // Hand gesture drawing
-              Center(child: _HandGesture(
-                  fingers: sign['fingers'] as String,
-                  color: Colors.white)),
-              // Urdu letter badge
-              Positioned(top: 8, right: 10,
-                child: Container(
-                  width: 36, height: 36,
-                  decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.25),
-                      shape: BoxShape.circle),
-                  child: Center(child: Text(sign['urdu'] as String,
-                    style: const TextStyle(
-                        fontFamily: 'JameelNooriNastaleeq',
-                        color: Colors.white, fontSize: 18,
-                        fontWeight: FontWeight.bold),
-                    textDirection: TextDirection.rtl)),
-                )),
-            ]),
-          ),
-          // Info section
-          Expanded(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: [
-                      Text(sign['roman'] as String,
-                        style: TextStyle(fontSize: 15,
-                            fontWeight: FontWeight.bold, color: c1)),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                            color: c1.withOpacity(0.1),
-                            borderRadius: BorderRadius.circular(8)),
-                        child: Text(sign['urdu'] as String,
-                          style: TextStyle(fontFamily: 'JameelNooriNastaleeq',
-                              color: c1, fontSize: 14,
-                              fontWeight: FontWeight.bold),
-                          textDirection: TextDirection.rtl),
-                      ),
-                    ]),
-                  if (isExpanded) ...[
-                    const SizedBox(height: 6),
-                    Text(sign['desc'] as String,
-                      style: const TextStyle(fontSize: 11,
-                          color: Color(0xFF555555), height: 1.4)),
-                  ] else ...[
-                    const SizedBox(height: 4),
-                    const Row(children: [
-                      Icon(Icons.touch_app, size: 11, color: Colors.grey),
-                      SizedBox(width: 4),
-                      Text('Tap to see details',
-                        style: TextStyle(fontSize: 10, color: Colors.grey)),
-                    ]),
-                  ],
-                ],
-              ),
-            ),
-          ),
+              // Decorative circles
+              Positioned(right:-15, top:-15, child: Container(width:60, height:60,
+                  decoration: BoxDecoration(shape: BoxShape.circle,
+                      color: Colors.white.withOpacity(0.1)))),
+              // Hand illustration
+              Center(child: _HandIllustration(fingers: s['f'] as String)),
+              // Urdu letter top-right
+              Positioned(top:8, right:10,
+                child: Container(width:34, height:34,
+                  decoration: BoxDecoration(shape: BoxShape.circle,
+                      color: Colors.white.withOpacity(0.2)),
+                  child: Center(child: Text(s['u'] as String,
+                    style: const TextStyle(fontFamily: 'JameelNooriNastaleeq',
+                        color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
+                    textDirection: TextDirection.rtl)))),
+            ])),
+          // Body
+          Expanded(child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 8),
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  Text(s['r'] as String, style: TextStyle(color: c1, fontSize: 14,
+                      fontWeight: FontWeight.bold)),
+                  Text(s['u'] as String, style: const TextStyle(
+                      fontFamily: 'JameelNooriNastaleeq',
+                      color: Colors.white70, fontSize: 14),
+                      textDirection: TextDirection.rtl),
+                ]),
+                const SizedBox(height: 5),
+                if (sel)
+                  Expanded(child: Text(s['g'] as String,
+                      style: const TextStyle(color: Colors.white60,
+                          fontSize: 10, height: 1.4),
+                      maxLines: 4, overflow: TextOverflow.ellipsis))
+                else
+                  const Text('Tap to see gesture details',
+                      style: TextStyle(color: Colors.white30, fontSize: 10)),
+              ])),
+          )),
         ]),
       ),
     );
   }
-}
 
-// ── Custom Hand Gesture Painter ───────────────────────────────────────────────
-
-/// fingers: 5-char string "01110"
-///   char[0]=thumb, [1]=index, [2]=middle, [3]=ring, [4]=pinky
-///   '1'=extended, '0'=closed
-class _HandGesture extends StatelessWidget {
-  final String fingers;
-  final Color color;
-  const _HandGesture({required this.fingers, required this.color});
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 70, height: 80,
-      child: CustomPaint(
-        painter: _HandPainter(fingers: fingers, color: color),
-      ),
+  Widget _buildListCard(int i) {
+    final s = _filtered[i];
+    final c1 = Color((s['c'] as List)[0] as int);
+    final c2 = Color((s['c'] as List)[1] as int);
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+          color: const Color(0xFF1a1a2e),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: Colors.white.withOpacity(0.08))),
+      child: Row(children: [
+        // Gradient circle with hand
+        Container(width: 60, height: 60,
+          decoration: BoxDecoration(
+              gradient: LinearGradient(colors: [c1, c2]),
+              borderRadius: BorderRadius.circular(16)),
+          child: Center(child: _HandIllustration(fingers: s['f'] as String, size: 40))),
+        const SizedBox(width: 14),
+        // Info
+        Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(children: [
+              Text(s['r'] as String, style: TextStyle(color: c1,
+                  fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(width: 8),
+              Container(padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                decoration: BoxDecoration(color: c1.withOpacity(0.15),
+                    borderRadius: BorderRadius.circular(8)),
+                child: Text(s['u'] as String, style: TextStyle(
+                    fontFamily: 'JameelNooriNastaleeq', color: c1,
+                    fontSize: 14, fontWeight: FontWeight.bold),
+                    textDirection: TextDirection.rtl)),
+            ]),
+            const SizedBox(height: 4),
+            Text(s['g'] as String, style: const TextStyle(
+                color: Colors.white54, fontSize: 11, height: 1.4),
+                maxLines: 2, overflow: TextOverflow.ellipsis),
+          ])),
+      ]),
     );
   }
 }
 
-class _HandPainter extends CustomPainter {
+// ── Custom hand illustration with 3D look ──────────────────────────────────────
+
+class _HandIllustration extends StatelessWidget {
   final String fingers;
-  final Color color;
-  _HandPainter({required this.fingers, required this.color});
+  final double size;
+  const _HandIllustration({required this.fingers, this.size = 56});
+  @override
+  Widget build(BuildContext context) => SizedBox(
+      width: size, height: size * 1.15,
+      child: CustomPaint(painter: _Hand3DPainter(fingers: fingers)));
+}
+
+class _Hand3DPainter extends CustomPainter {
+  final String fingers;
+  _Hand3DPainter({required this.fingers});
+
+  bool get(int i) => i < fingers.length && fingers[i] == '1';
 
   @override
-  void paint(Canvas canvas, Size size) {
-    final palmPaint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
+  void paint(Canvas canvas, Size s) {
+    final w = s.width; final h = s.height;
+    final cx = w * 0.5;
+    final palmTop = h * 0.48; final palmBot = h * 0.88;
 
-    final outlinePaint = Paint()
-      ..color = color.withOpacity(0.5)
+    // Shadow paint
+    final shadow = Paint()
+      ..color = Colors.black.withOpacity(0.3)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+
+    // Palm fill
+    final palmFill = Paint()..color = Colors.white.withOpacity(0.92)..style = PaintingStyle.fill;
+    final palmEdge = Paint()
+      ..color = Colors.white.withOpacity(0.4)
       ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.5;
+      ..strokeWidth = 1.0;
 
-    final cx = size.width / 2;
-    final palmTop = size.height * 0.52;
-    final palmBottom = size.height * 0.92;
-    final palmLeft = cx - 18;
-    final palmRight = cx + 18;
+    // Draw palm shadow
+    canvas.drawRRect(
+        RRect.fromRectAndRadius(
+            Rect.fromLTWH(cx - 16, palmTop + 2, 32, palmBot - palmTop),
+            const Radius.circular(8)),
+        shadow);
 
     // Draw palm
     final palmPath = Path()
-      ..moveTo(palmLeft, palmTop)
-      ..lineTo(palmLeft, palmBottom)
-      ..quadraticBezierTo(cx, palmBottom + 4, palmRight, palmBottom)
-      ..lineTo(palmRight, palmTop)
+      ..moveTo(cx - 16, palmTop + 4)
+      ..lineTo(cx - 16, palmBot - 6)
+      ..quadraticBezierTo(cx - 16, palmBot + 2, cx - 8, palmBot + 4)
+      ..quadraticBezierTo(cx, palmBot + 6, cx + 8, palmBot + 4)
+      ..quadraticBezierTo(cx + 16, palmBot + 2, cx + 16, palmBot - 6)
+      ..lineTo(cx + 16, palmTop + 4)
       ..close();
-    canvas.drawPath(palmPath, palmPaint);
-    canvas.drawPath(palmPath, outlinePaint);
+    canvas.drawPath(palmPath, palmFill);
+    canvas.drawPath(palmPath, palmEdge);
 
-    // Finger positions (x offset from center, width)
-    final fingerData = [
-      // [xOffset, width, heightExtended, heightClosed]
-      [-22.0, 9.0, 28.0, 12.0], // thumb (angled)
-      [-12.0, 8.0, 32.0, 10.0], // index
-      [-2.0,  8.0, 35.0, 10.0], // middle
-      [ 8.0,  8.0, 30.0, 10.0], // ring
-      [18.0,  7.0, 24.0,  9.0], // pinky
+    // Finger specs: [xOff, width, extendedH, closedH]
+    final specs = [
+      [-20.0, 7.0, h*0.28, h*0.08], // thumb
+      [-10.0, 7.0, h*0.36, h*0.09], // index
+      [-1.5,  7.0, h*0.40, h*0.09], // middle
+      [ 8.0,  6.5, h*0.34, h*0.08], // ring
+      [16.5,  5.5, h*0.26, h*0.07], // pinky
     ];
 
     for (int i = 0; i < 5; i++) {
-      final fd = fingerData[i];
-      final isExtended = i < fingers.length && fingers[i] == '1';
-      final fx = cx + fd[0];
-      final fw = fd[1];
-      final fh = isExtended ? fd[2] : fd[3];
+      final sp = specs[i];
+      final extended = get(i);
+      final fx = cx + sp[0];
+      final fw = sp[1];
+      final fh = extended ? sp[2] : sp[3];
+      final fy = extended ? palmTop - fh : palmTop - fh * 0.6;
 
-      final fy = isExtended
-          ? palmTop - fh
-          : palmTop - fh * 0.35;
+      // Shadow
+      canvas.drawRRect(
+          RRect.fromRectAndRadius(
+              Rect.fromLTWH(fx - fw/2 + 1, fy + 2, fw, fh),
+              Radius.circular(fw/2)),
+          shadow);
 
-      // Thumb is slightly angled
       if (i == 0) {
-        final thumbPath = Path()
-          ..moveTo(fx - 2, palmTop)
-          ..quadraticBezierTo(
-              fx - fw * 0.5, fy + fh * 0.3,
-              fx - fw,       fy)
-          ..quadraticBezierTo(
-              fx, fy - fw * 0.3,
-              fx + fw * 0.5, fy + fh * 0.2)
-          ..lineTo(fx + 2, palmTop)
-          ..close();
-        canvas.drawPath(thumbPath, palmPaint);
-        canvas.drawPath(thumbPath, outlinePaint);
+        // Thumb — angled
+        final tPath = Path();
+        if (extended) {
+          tPath.moveTo(fx + 2, palmTop + 4)
+            ..quadraticBezierTo(fx - fw*1.2, palmTop - fh*0.4,
+                fx - fw*0.8, fy)
+            ..quadraticBezierTo(fx + fw*0.5, fy - fw*0.2,
+                fx + fw, fy + fh*0.3)
+            ..lineTo(fx + 4, palmTop + 4)
+            ..close();
+        } else {
+          tPath.moveTo(fx - 2, palmTop + 2)
+            ..quadraticBezierTo(fx - fw*0.8, palmTop - fh*0.4,
+                fx - fw*0.4, fy)
+            ..quadraticBezierTo(fx + fw*0.3, fy + fh*0.2,
+                fx + fw*0.2, palmTop + 2)
+            ..close();
+        }
+        canvas.drawPath(tPath, palmFill);
+        canvas.drawPath(tPath, palmEdge);
       } else {
-        // Regular finger (rounded rectangle)
-        final rRect = RRect.fromRectAndRadius(
-          Rect.fromLTWH(fx - fw / 2, fy, fw, fh),
-          Radius.circular(fw / 2),
-        );
-        canvas.drawRRect(rRect, palmPaint);
-        canvas.drawRRect(rRect, outlinePaint);
-
-        // Knuckle lines
-        if (!isExtended) {
+        // Regular finger
+        canvas.drawRRect(
+            RRect.fromRectAndRadius(
+                Rect.fromLTWH(fx - fw/2, fy, fw, fh),
+                Radius.circular(fw/2)),
+            palmFill);
+        canvas.drawRRect(
+            RRect.fromRectAndRadius(
+                Rect.fromLTWH(fx - fw/2, fy, fw, fh),
+                Radius.circular(fw/2)),
+            palmEdge);
+        // Knuckle detail
+        if (!extended && fh > 6) {
+          final knPaint = Paint()
+            ..color = Colors.white.withOpacity(0.3)
+            ..strokeWidth = 0.8
+            ..style = PaintingStyle.stroke;
           canvas.drawLine(
-            Offset(fx - fw / 2 + 2, palmTop - 3),
-            Offset(fx + fw / 2 - 2, palmTop - 3),
-            outlinePaint,
-          );
+              Offset(fx - fw/2 + 2, palmTop - 2),
+              Offset(fx + fw/2 - 2, palmTop - 2),
+              knPaint);
+        }
+        // Fingernail for extended fingers
+        if (extended && fh > 10) {
+          canvas.drawRRect(
+              RRect.fromRectAndRadius(
+                  Rect.fromLTWH(fx - fw/2 + 1.5, fy + 2, fw - 3, fh*0.25),
+                  const Radius.circular(3)),
+              Paint()..color = Colors.white.withOpacity(0.35));
         }
       }
     }
 
-    // Wrist
-    final wristPaint = Paint()..color = color..style = PaintingStyle.fill;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromLTWH(palmLeft + 2, palmBottom - 2, palmRight - palmLeft - 4, 8),
-        const Radius.circular(4),
-      ),
-      wristPaint,
-    );
+    // Wrist joint line
+    canvas.drawLine(
+        Offset(cx - 14, palmBot - 3),
+        Offset(cx + 14, palmBot - 3),
+        Paint()..color = Colors.white.withOpacity(0.25)..strokeWidth = 1);
   }
 
   @override
-  bool shouldRepaint(_HandPainter old) => old.fingers != fingers;
+  bool shouldRepaint(_Hand3DPainter o) => o.fingers != fingers;
 }
