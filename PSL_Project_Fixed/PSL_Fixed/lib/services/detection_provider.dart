@@ -3,68 +3,107 @@ import 'model_service.dart';
 
 class DetectionProvider extends ChangeNotifier {
   DetectionResult? _lastResult;
-  List<DetectionResult> _recentHistory = [];
   bool _isDetecting = false;
   bool _isCameraActive = false;
   String _detectedWord = '';
   String _detectedSentence = '';
   int _detectionCount = 0;
+
+  // Live consecutive-frame counter
+  int _consecutiveCount = 0;
+  String? _lastSeenRoman;
   DateTime? _lastLetterAddedTime;
 
-  static const int _sameLetterCooldownMs = 1800;
-  static const int _stableFramesRequired = 5;
+  // Pause flag — user can halt auto-commit without stopping the camera
+  bool _detectionPaused = false;
+  bool get detectionPaused => _detectionPaused;
 
-  DetectionResult? get lastResult => _lastResult;
-  List<DetectionResult> get recentHistory => List.unmodifiable(_recentHistory);
-  bool get isDetecting => _isDetecting;
-  bool get isCameraActive => _isCameraActive;
-  String get detectedWord => _detectedWord;
-  String get detectedSentence => _detectedSentence;
-  int get detectionCount => _detectionCount;
+  void toggleDetectionPause() {
+    _detectionPaused = !_detectionPaused;
+    if (!_detectionPaused) {
+      // Apply cooldown on resume so the hand shown during pause isn't committed immediately
+      _lastLetterAddedTime = DateTime.now();
+      _consecutiveCount = 0;
+      _lastSeenRoman = null;
+    }
+    notifyListeners();
+  }
+
+  // How many consecutive high-confidence frames at the same sign before commit
+  static const int _stableFramesRequired = 3;
+
+  // After committing, ignore ALL results for this long (prevents instant re-adds)
+  static const int _cooldownMs = 1500;
+
+  DetectionResult? get lastResult       => _lastResult;
+  bool get isDetecting                  => _isDetecting;
+  bool get isCameraActive               => _isCameraActive;
+  String get detectedWord               => _detectedWord;
+  String get detectedSentence           => _detectedSentence;
+  int get detectionCount                => _detectionCount;
   String get fullText =>
       _detectedSentence.isEmpty ? _detectedWord : '$_detectedSentence$_detectedWord';
 
-  void setDetecting(bool v) { _isDetecting = v; notifyListeners(); }
+  void setDetecting(bool v)    { _isDetecting = v;   notifyListeners(); }
   void setCameraActive(bool v) { _isCameraActive = v; notifyListeners(); }
+
+  /// Called when no hand is visible — resets the consecutive counter.
+  void onHandLost() {
+    if (_consecutiveCount != 0 || _lastSeenRoman != null) {
+      _consecutiveCount = 0;
+      _lastSeenRoman = null;
+      notifyListeners();
+    }
+  }
 
   void updateDetection(DetectionResult result) {
     _lastResult = result;
     _detectionCount++;
 
-    _recentHistory.insert(0, result);
-    if (_recentHistory.length > 20) {
-      _recentHistory = _recentHistory.sublist(0, 20);
+    // When paused, still update lastResult for the UI card but skip auto-commit
+    if (_detectionPaused) { notifyListeners(); return; }
+
+    // ── Cooldown guard ────────────────────────────────────────────────────────
+    // After a letter is committed, ignore everything for _cooldownMs.
+    final inCooldown = _lastLetterAddedTime != null &&
+        DateTime.now().difference(_lastLetterAddedTime!).inMilliseconds < _cooldownMs;
+    if (inCooldown) {
+      notifyListeners();
+      return;
     }
 
-    // Only add letter if confidence is high enough
-    if (!result.isHighConfidence) { notifyListeners(); return; }
+    // ── Consecutive-frame stability ───────────────────────────────────────────
+    if (result.romanLabel == _lastSeenRoman) {
+      _consecutiveCount++;
+    } else {
+      _consecutiveCount = 1;
+      _lastSeenRoman = result.romanLabel;
+    }
 
-    // Require N stable consecutive frames with same label
-    if (_recentHistory.length >= _stableFramesRequired) {
-      final recent = _recentHistory.sublist(0, _stableFramesRequired);
-      final allSame = recent.every((r) => r.urduLabel == result.urduLabel);
-      if (allSame) _tryAddLetter(result.urduLabel);
+    // ── Commit ────────────────────────────────────────────────────────────────
+    if (result.isHighConfidence && _consecutiveCount >= _stableFramesRequired) {
+      _commitLetter(result.urduLabel);
     }
 
     notifyListeners();
   }
 
-  void _tryAddLetter(String letter) {
-    final now = DateTime.now();
-    if (_lastLetterAddedTime != null) {
-      final elapsed = now.difference(_lastLetterAddedTime!).inMilliseconds;
-      if (elapsed < _sameLetterCooldownMs) return;
-    }
-    _detectedWord += letter;
-    _lastLetterAddedTime = now;
-    debugPrint('✅ Added: $letter  Word: $_detectedWord');
+  void _commitLetter(String urduLetter) {
+    _detectedWord += urduLetter;
+    _lastLetterAddedTime = DateTime.now();
+    _consecutiveCount = 0;   // require fresh stability for next letter
+    _lastSeenRoman = null;
+    debugPrint('✅ Added: $urduLetter  Word: $_detectedWord');
   }
 
   void addSpaceToWord() {
     if (_detectedWord.isNotEmpty) {
       _detectedSentence += '$_detectedWord ';
       _detectedWord = '';
-      _lastLetterAddedTime = null;
+      // Keep cooldown running so detection doesn't immediately add to the new word
+      _lastLetterAddedTime = DateTime.now();
+      _consecutiveCount = 0;
+      _lastSeenRoman = null;
       notifyListeners();
     }
   }
@@ -91,15 +130,18 @@ class DetectionProvider extends ChangeNotifier {
   void clearAll() {
     _detectedWord = '';
     _detectedSentence = '';
-    _recentHistory.clear();
     _lastResult = null;
     _detectionCount = 0;
+    _consecutiveCount = 0;
+    _lastSeenRoman = null;
     _lastLetterAddedTime = null;
     notifyListeners();
   }
 
   void clearWord() {
     _detectedWord = '';
+    _consecutiveCount = 0;
+    _lastSeenRoman = null;
     _lastLetterAddedTime = null;
     notifyListeners();
   }

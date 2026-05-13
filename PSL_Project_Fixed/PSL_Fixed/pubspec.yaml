@@ -15,7 +15,7 @@ dependencies:
   permission_handler: ^11.3.1
 
   # TFLite — runs BOTH hand landmark model AND classification model
-  tflite_flutter: ^0.10.1
+  tflite_flutter: ^0.11.0
 
   # Image processing for camera frames → model input
   image: ^4.1.7

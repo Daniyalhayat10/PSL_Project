@@ -1,11 +1,13 @@
-import 'dart:math';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:tflite_flutter/tflite_flutter.dart';
-import 'package:image/image.dart' as img;
 
 class ModelService extends ChangeNotifier {
+<<<<<<< Updated upstream
   Interpreter? _palmInterpreter;
   Interpreter? _landmarkInterpreter;
+=======
+>>>>>>> Stashed changes
   Interpreter? _classifierInterpreter;
 
   bool _isLoaded = false;
@@ -16,10 +18,14 @@ class ModelService extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String get loadError => _loadError;
 
+<<<<<<< Updated upstream
   static const int _palmInputSize     = 192;
   static const int _landmarkInputSize = 224;
   static const double _palmThreshold  = 0.05; // very permissive
   static const double _handThreshold  = 0.01; // basically always try
+=======
+  static const MethodChannel _channel = MethodChannel('psl/handlandmark');
+>>>>>>> Stashed changes
 
   // Pre-computed MediaPipe palm-detection anchors (strides [8,16,16,16], 2/cell)
   late final List<List<double>> _anchors = _buildAnchors();
@@ -47,6 +53,7 @@ class ModelService extends ChangeNotifier {
     notifyListeners();
     try {
       final opts = InterpreterOptions()..threads = 2;
+<<<<<<< Updated upstream
       _palmInterpreter = await Interpreter.fromAsset(
           'assets/models/palm_detection_lite.tflite', options: opts);
       _landmarkInterpreter = await Interpreter.fromAsset(
@@ -54,6 +61,16 @@ class ModelService extends ChangeNotifier {
       _classifierInterpreter = await Interpreter.fromAsset(
           'assets/models/hand_landmark_nn.tflite', options: opts);
       debugPrint('✅ All 3 models loaded. Anchors: ${_anchors.length}');
+=======
+
+      debugPrint('⏳ Loading hand_landmark_nn.tflite ...');
+      _classifierInterpreter = await Interpreter.fromAsset(
+        'assets/models/hand_landmark_nn.tflite', options: opts);
+      debugPrint('✅ Classifier: '
+          'in=${_classifierInterpreter!.getInputTensor(0).shape} '
+          'out=${_classifierInterpreter!.getOutputTensor(0).shape}');
+
+>>>>>>> Stashed changes
       _isLoaded = true;
     } catch (e) {
       _loadError = e.toString();
@@ -64,6 +81,7 @@ class ModelService extends ChangeNotifier {
     }
   }
 
+<<<<<<< Updated upstream
   // ── Main pipeline ──────────────────────────────────────────────────────────
   DetectionResult? processFrame(img.Image frame) {
     if (!_isLoaded) return null;
@@ -181,10 +199,43 @@ class ModelService extends ChangeNotifier {
       ]);
     } catch (e) {
       debugPrint('❌ Landmark: $e');
+=======
+  /// Sends raw YUV planes to the native MediaPipe hand landmarker, then
+  /// classifies the returned 63 landmark coordinates with the TFLite NN.
+  Future<DetectionResult?> processYuv({
+    required int width,
+    required int height,
+    required Uint8List yPlane,
+    required Uint8List uPlane,
+    required Uint8List vPlane,
+    required int yStride,
+    required int uvStride,
+    required int uvPixelStride,
+  }) async {
+    if (!_isLoaded) return null;
+    try {
+      final dynamic raw = await _channel.invokeMethod('getLandmarks', {
+        'width':         width,
+        'height':        height,
+        'yPlane':        yPlane,
+        'uPlane':        uPlane,
+        'vPlane':        vPlane,
+        'yStride':       yStride,
+        'uvStride':      uvStride,
+        'uvPixelStride': uvPixelStride,
+      });
+      if (raw == null) return null;
+      final landmarks = (raw as List).cast<double>();
+      if (landmarks.length < 63) return null;
+      return _classify(_normalize(landmarks));
+    } catch (e) {
+      debugPrint('❌ processYuv: $e');
+>>>>>>> Stashed changes
       return null;
     }
   }
 
+<<<<<<< Updated upstream
   // ── Stage 3: Normalise (must match Python training) ────────────────────────
   List<double> _normaliseLandmarks(List<List<double>> pts) {
     final flat = pts.expand((p)=>p).toList();
@@ -195,11 +246,24 @@ class ModelService extends ChangeNotifier {
     double mx=0; for (final v in flat) { if(v.abs()>mx) mx=v.abs(); }
     if (mx>0) { for (int i=0;i<flat.length;i++) flat[i]/=mx; }
     return flat;
+=======
+  List<double> _normalize(List<double> flat) {
+    final r = List<double>.from(flat);
+    final wx = r[0], wy = r[1], wz = r[2];
+    for (int i = 0; i < r.length; i += 3) {
+      r[i] -= wx; r[i + 1] -= wy; r[i + 2] -= wz;
+    }
+    double mx = 0;
+    for (final v in r) { if (v.abs() > mx) mx = v.abs(); }
+    if (mx > 0) { for (int i = 0; i < r.length; i++) r[i] /= mx; }
+    return r;
+>>>>>>> Stashed changes
   }
 
   // ── Stage 4: Classify ──────────────────────────────────────────────────────
   DetectionResult? _classify(List<double> lm) {
     try {
+<<<<<<< Updated upstream
       final n = _classifierInterpreter!.getOutputTensor(0).shape.last;
       final out = List.filled(n,0.0).reshape([1,n]);
       _classifierInterpreter!.run([lm], out);
@@ -212,10 +276,33 @@ class ModelService extends ChangeNotifier {
         urduLabel:  best<urduLabels.length  ? urduLabels[best]  : '?',
         romanLabel: best<romanLabels.length ? romanLabels[best] : '?',
         confidence: bv, allProbabilities: probs,
+=======
+      final outShape = _classifierInterpreter!.getOutputTensor(0).shape;
+      final n = outShape.last;
+      final input  = [landmarks];
+      final output = List.filled(n, 0.0).reshape([1, n]);
+      _classifierInterpreter!.run(input, output);
+
+      final probs = (output[0] as List).cast<double>();
+      int best = 0; double bv = probs[0];
+      for (int i = 1; i < probs.length; i++) {
+        if (probs[i] > bv) { bv = probs[i]; best = i; }
+      }
+      debugPrint('🔍 ${best < romanLabels.length ? romanLabels[best] : best}'
+          '  (${(bv * 100).toStringAsFixed(1)}%)');
+
+      return DetectionResult(
+        classIndex:       best,
+        urduLabel:        best < urduLabels.length  ? urduLabels[best]  : '?',
+        romanLabel:       best < romanLabels.length ? romanLabels[best] : '?',
+        confidence:       bv,
+        allProbabilities: probs,
+>>>>>>> Stashed changes
       );
     } catch(e) { debugPrint('❌ Classify: $e'); return null; }
   }
 
+<<<<<<< Updated upstream
   // ── Helpers ────────────────────────────────────────────────────────────────
   List<List<List<List<double>>>> _buildInput(img.Image src, int size) {
     return List.generate(1, (_) =>
@@ -266,6 +353,10 @@ class ModelService extends ChangeNotifier {
   void dispose() {
     _palmInterpreter?.close();
     _landmarkInterpreter?.close();
+=======
+  @override
+  void dispose() {
+>>>>>>> Stashed changes
     _classifierInterpreter?.close();
     super.dispose();
   }

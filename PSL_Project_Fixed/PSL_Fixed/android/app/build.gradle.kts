@@ -23,8 +23,8 @@ android {
         applicationId = "com.psl.psl_urdu_detector"
         minSdk = 26
         targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode()
-        versionName = flutter.versionName()
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
     }
 
     buildTypes { 
@@ -38,4 +38,17 @@ release {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Force TFLite 2.14+ so FULLY_CONNECTED op v12 is supported.
+    implementation("org.tensorflow:tensorflow-lite:2.14.0")
+    implementation("org.tensorflow:tensorflow-lite-gpu:2.14.0")
+
+    // MediaPipe Tasks Vision — provides the full hand-landmark pipeline
+    // (palm detection + crop + landmark). Exclude its bundled TFLite to
+    // avoid conflicts with the version we already force above.
+    implementation("com.google.mediapipe:tasks-vision:0.10.14") {
+        exclude(group = "org.tensorflow")
+    }
 }

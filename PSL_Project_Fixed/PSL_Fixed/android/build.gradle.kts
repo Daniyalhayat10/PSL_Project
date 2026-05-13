@@ -18,6 +18,14 @@ subprojects {
 subprojects {
     project.evaluationDependsOn(":app")
 }
+subprojects {
+    configurations.all {
+        resolutionStrategy {
+            force("org.tensorflow:tensorflow-lite:2.14.0")
+            force("org.tensorflow:tensorflow-lite-gpu:2.14.0")
+        }
+    }
+}
 
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
