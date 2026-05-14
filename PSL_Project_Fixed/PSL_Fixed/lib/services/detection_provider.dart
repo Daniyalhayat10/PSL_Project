@@ -30,10 +30,10 @@ class DetectionProvider extends ChangeNotifier {
   }
 
   // How many consecutive high-confidence frames at the same sign before commit
-  static const int _stableFramesRequired = 3;
+  static const int _stableFramesRequired = 2;
 
   // After committing, ignore ALL results for this long (prevents instant re-adds)
-  static const int _cooldownMs = 1500;
+  static const int _cooldownMs = 1200;
 
   DetectionResult? get lastResult       => _lastResult;
   bool get isDetecting                  => _isDetecting;
@@ -82,6 +82,8 @@ class DetectionProvider extends ChangeNotifier {
 
     // ── Commit ────────────────────────────────────────────────────────────────
     if (result.isHighConfidence && _consecutiveCount >= _stableFramesRequired) {
+      _commitLetter(result.urduLabel);
+    } else if (result.isMediumConfidence && _consecutiveCount >= _stableFramesRequired + 3) {
       _commitLetter(result.urduLabel);
     }
 

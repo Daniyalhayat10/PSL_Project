@@ -1,9 +1,11 @@
-import 'dart:typed_data';
+import 'dart:math';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
+import 'package:image/image.dart' as img;
 import 'package:tflite_flutter/tflite_flutter.dart';
 
 class ModelService extends ChangeNotifier {
+  Interpreter? _palmInterpreter;
+  Interpreter? _landmarkInterpreter;
   Interpreter? _classifierInterpreter;
 
   bool _isLoaded = false;
@@ -14,9 +16,15 @@ class ModelService extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String get loadError => _loadError;
 
-  static const MethodChannel _channel = MethodChannel('psl/handlandmark');
+  static const int    _palmInputSize     = 192;
+  static const int    _landmarkInputSize = 224;
+  static const double _palmThreshold     = 0.05;
+  static const double _handThreshold     = 0.01;
 
-  // ── Labels ─────────────────────────────────────────────────────────────────
+  // Pre-computed MediaPipe palm-detection anchors (strides [8,16,16,16], 2/cell)
+  late final List<List<double>> _anchors = _buildAnchors();
+
+  // Labels must match the training class order (Python sorted() on folder names)
   static const List<String> romanLabels = [
     'Ain','Alif','Bay','Daal','Duaad','Fay','Gaaf','Hay','Hay2',
     'Kaaf','Khay','Laam','Meem','Noon','Pay','Ray','Say','Say2',
@@ -39,14 +47,16 @@ class ModelService extends ChangeNotifier {
     notifyListeners();
     try {
       final opts = InterpreterOptions()..threads = 2;
-
-      debugPrint('⏳ Loading hand_landmark_nn.tflite ...');
+      _palmInterpreter = await Interpreter.fromAsset(
+          'assets/models/palm_detection_lite.tflite', options: opts);
+      _landmarkInterpreter = await Interpreter.fromAsset(
+          'assets/models/hand_landmark_lite.tflite', options: opts);
       _classifierInterpreter = await Interpreter.fromAsset(
-        'assets/models/hand_landmark_nn.tflite', options: opts);
-      debugPrint('✅ Classifier: '
+          'assets/models/hand_landmark_nn.tflite', options: opts);
+      debugPrint('✅ All 3 models loaded. Anchors: ${_anchors.length}');
+      debugPrint('   Classifier '
           'in=${_classifierInterpreter!.getInputTensor(0).shape} '
           'out=${_classifierInterpreter!.getOutputTensor(0).shape}');
-
       _isLoaded = true;
     } catch (e) {
       _loadError = e.toString();
@@ -57,81 +67,202 @@ class ModelService extends ChangeNotifier {
     }
   }
 
-  /// Sends raw YUV planes to the native MediaPipe hand landmarker, then
-  /// classifies the returned 63 landmark coordinates with the TFLite NN.
-  Future<DetectionResult?> processYuv({
-    required int width,
-    required int height,
-    required Uint8List yPlane,
-    required Uint8List uPlane,
-    required Uint8List vPlane,
-    required int yStride,
-    required int uvStride,
-    required int uvPixelStride,
-  }) async {
+  // ── Main pipeline ──────────────────────────────────────────────────────────
+  DetectionResult? processFrame(img.Image frame) {
     if (!_isLoaded) return null;
+
+    // Stage 1: palm detection → get hand crop
+    final crop = _detectAndCrop(frame);
+    if (crop == null) return null;
+
+    // Stage 2: hand landmark extraction
+    final lm = _extractLandmarks(crop);
+    if (lm == null) return null;
+
+    // Stage 3: normalise (must match Python training pipeline)
+    final norm = _normaliseLandmarks(lm);
+    if (norm.isEmpty) return null;
+
+    // Stage 4: classify
+    return _classify(norm);
+  }
+
+  // ── Stage 1: Palm detection ────────────────────────────────────────────────
+  img.Image? _detectAndCrop(img.Image frame) {
     try {
-      final dynamic raw = await _channel.invokeMethod('getLandmarks', {
-        'width':         width,
-        'height':        height,
-        'yPlane':        yPlane,
-        'uPlane':        uPlane,
-        'vPlane':        vPlane,
-        'yStride':       yStride,
-        'uvStride':      uvStride,
-        'uvPixelStride': uvPixelStride,
-      });
-      if (raw == null) return null;
-      final landmarks = (raw as List).cast<double>();
-      if (landmarks.length < 63) return null;
-      return _classify(_normalize(landmarks));
+      final palm192 = img.copyResize(
+          _squareCrop(frame), width: _palmInputSize, height: _palmInputSize);
+      final input = _buildInput(palm192, _palmInputSize);
+
+      final regShape = _palmInterpreter!.getOutputTensor(0).shape; // [1,2016,18]
+      final scShape  = _palmInterpreter!.getOutputTensor(1).shape; // [1,2016,1]
+      final regSz    = regShape.reduce((a, b) => a * b);
+      final scSz     = scShape .reduce((a, b) => a * b);
+
+      final outputs = <int, Object>{
+        0: List.filled(regSz, 0.0).reshape(regShape),
+        1: List.filled(scSz,  0.0).reshape(scShape),
+      };
+      _palmInterpreter!.runForMultipleInputs([input], outputs);
+
+      final regs   = _flatten(outputs[0]!);
+      final scores = _flatten(outputs[1]!);
+
+      double bestScore = -1e9;
+      int    bestIdx   = 0;
+      for (int i = 0; i < scores.length; i++) {
+        final s = 1.0 / (1.0 + exp(-scores[i]));
+        if (s > bestScore) { bestScore = s; bestIdx = i; }
+      }
+      debugPrint('🖐 Palm score: ${bestScore.toStringAsFixed(4)}');
+
+      final anchor = _anchors[bestIdx];
+      final reg    = regs.sublist(bestIdx * 18, bestIdx * 18 + 4);
+
+      final cx = anchor[0] + reg[0] / _palmInputSize;
+      final cy = anchor[1] + reg[1] / _palmInputSize;
+      final bw = (reg[2].abs() / _palmInputSize).clamp(0.05, 1.0);
+      final bh = (reg[3].abs() / _palmInputSize).clamp(0.05, 1.0);
+
+      const pad = 0.45;
+      final x1 = ((cx - bw * (0.5 + pad)) * frame.width ).round().clamp(0, frame.width);
+      final y1 = ((cy - bh * (0.5 + pad)) * frame.height).round().clamp(0, frame.height);
+      final x2 = ((cx + bw * (0.5 + pad)) * frame.width ).round().clamp(0, frame.width);
+      final y2 = ((cy + bh * (0.5 + pad)) * frame.height).round().clamp(0, frame.height);
+      final cw = (x2 - x1).clamp(30, frame.width);
+      final ch = (y2 - y1).clamp(30, frame.height);
+
+      img.Image cropped;
+      if (bestScore > _palmThreshold && cw > 30 && ch > 30) {
+        cropped = img.copyCrop(frame, x: x1, y: y1, width: cw, height: ch);
+      } else {
+        cropped = _squareCrop(frame); // fallback: centre crop
+      }
+      return img.copyResize(cropped,
+          width: _landmarkInputSize, height: _landmarkInputSize);
     } catch (e) {
-      debugPrint('❌ processYuv: $e');
+      debugPrint('❌ Palm detect: $e');
+      return img.copyResize(_squareCrop(frame),
+          width: _landmarkInputSize, height: _landmarkInputSize);
+    }
+  }
+
+  // ── Stage 2: Hand landmark model ───────────────────────────────────────────
+  List<List<double>>? _extractLandmarks(img.Image img224) {
+    try {
+      final input = _buildInput(img224, _landmarkInputSize);
+      final outputs = <int, Object>{
+        0: List.filled(63, 0.0).reshape([1, 63]), // raw pixel coords
+        1: List.filled(1,  0.0).reshape([1, 1]),  // hand presence flag
+        2: List.filled(1,  0.0).reshape([1, 1]),  // handedness
+        3: List.filled(63, 0.0).reshape([1, 63]), // world landmarks
+      };
+      _landmarkInterpreter!.runForMultipleInputs([input], outputs);
+
+      final flag = ((outputs[1] as List)[0] as List)[0] as double;
+      debugPrint('🖐 Hand flag: ${flag.toStringAsFixed(4)}');
+      if (flag < _handThreshold) return null;
+
+      // output[0] = raw pixel coords (0–224), divide by 224 → [0,1]
+      final raw = _flatten(outputs[0]!);
+      if (raw.length < 63) return null;
+
+      return List.generate(21, (i) => [
+        raw[i * 3]     / _landmarkInputSize,
+        raw[i * 3 + 1] / _landmarkInputSize,
+        raw[i * 3 + 2] / _landmarkInputSize,
+      ]);
+    } catch (e) {
+      debugPrint('❌ Landmark: $e');
       return null;
     }
   }
 
-  List<double> _normalize(List<double> flat) {
-    final r = List<double>.from(flat);
-    final wx = r[0], wy = r[1], wz = r[2];
-    for (int i = 0; i < r.length; i += 3) {
-      r[i] -= wx; r[i + 1] -= wy; r[i + 2] -= wz;
+  // ── Stage 3: Normalise (must match Python training) ────────────────────────
+  List<double> _normaliseLandmarks(List<List<double>> pts) {
+    final flat = pts.expand((p) => p).toList();
+    final wx = flat[0], wy = flat[1], wz = flat[2];
+    for (int i = 0; i < flat.length; i += 3) {
+      flat[i] -= wx; flat[i + 1] -= wy; flat[i + 2] -= wz;
     }
     double mx = 0;
-    for (final v in r) { if (v.abs() > mx) mx = v.abs(); }
-    if (mx > 0) { for (int i = 0; i < r.length; i++) r[i] /= mx; }
-    return r;
+    for (final v in flat) { if (v.abs() > mx) mx = v.abs(); }
+    if (mx > 0) { for (int i = 0; i < flat.length; i++) flat[i] /= mx; }
+    return flat;
   }
 
-  // ── Classify ───────────────────────────────────────────────────────────────
+  // ── Stage 4: Classify ──────────────────────────────────────────────────────
   DetectionResult? _classify(List<double> lm) {
     try {
-      final outShape = _classifierInterpreter!.getOutputTensor(0).shape;
-      final n = outShape.last;
-      final input  = [lm];
-      final output = List.filled(n, 0.0).reshape([1, n]);
-      _classifierInterpreter!.run(input, output);
-
-      final probs = (output[0] as List).cast<double>();
+      final n = _classifierInterpreter!.getOutputTensor(0).shape.last;
+      final out = List.filled(n, 0.0).reshape([1, n]);
+      _classifierInterpreter!.run([lm], out);
+      final probs = (out[0] as List).cast<double>();
       int best = 0; double bv = probs[0];
       for (int i = 1; i < probs.length; i++) {
         if (probs[i] > bv) { bv = probs[i]; best = i; }
       }
       debugPrint('🔍 ${best < romanLabels.length ? romanLabels[best] : best}'
           '  (${(bv * 100).toStringAsFixed(1)}%)');
-
       return DetectionResult(
-        classIndex:       best,
-        urduLabel:        best < urduLabels.length  ? urduLabels[best]  : '?',
-        romanLabel:       best < romanLabels.length ? romanLabels[best] : '?',
-        confidence:       bv,
+        classIndex: best,
+        urduLabel:  best < urduLabels.length  ? urduLabels[best]  : '?',
+        romanLabel: best < romanLabels.length ? romanLabels[best] : '?',
+        confidence: bv,
         allProbabilities: probs,
       );
-    } catch(e) { debugPrint('❌ Classify: $e'); return null; }
+    } catch (e) { debugPrint('❌ Classify: $e'); return null; }
+  }
+
+  // ── Helpers ────────────────────────────────────────────────────────────────
+  List<List<List<List<double>>>> _buildInput(img.Image src, int size) {
+    return List.generate(1, (_) =>
+      List.generate(size, (y) =>
+        List.generate(size, (x) {
+          final p = src.getPixel(x, y);
+          return [p.r / 255.0, p.g / 255.0, p.b / 255.0];
+        })
+      )
+    );
+  }
+
+  img.Image _squareCrop(img.Image src) {
+    final s = min(src.width, src.height);
+    return img.copyCrop(src,
+        x: (src.width - s) ~/ 2, y: (src.height - s) ~/ 2,
+        width: s, height: s);
+  }
+
+  List<double> _flatten(Object o) {
+    if (o is List) return o.expand((e) => _flatten(e)).toList();
+    if (o is double) return [o];
+    if (o is num) return [o.toDouble()];
+    return [];
+  }
+
+  List<List<double>> _buildAnchors() {
+    final anchors = <List<double>>[];
+    const strides = [8, 16, 16, 16];
+    const size    = 192.0;
+    for (final stride in strides) {
+      final rows = (size / stride).ceil();
+      final cols = (size / stride).ceil();
+      for (int r = 0; r < rows; r++) {
+        for (int c = 0; c < cols; c++) {
+          final cx = (c + 0.5) / cols;
+          final cy = (r + 0.5) / rows;
+          anchors.add([cx, cy]);
+          anchors.add([cx, cy]);
+        }
+      }
+    }
+    return anchors;
   }
 
   @override
   void dispose() {
+    _palmInterpreter?.close();
+    _landmarkInterpreter?.close();
     _classifierInterpreter?.close();
     super.dispose();
   }
@@ -151,13 +282,20 @@ class DetectionResult {
     required this.allProbabilities,
   });
 
-  bool get isHighConfidence   => confidence >= 0.60;
-  bool get isMediumConfidence => confidence >= 0.35 && confidence < 0.60;
-  String get confidencePercent => '${(confidence*100).toStringAsFixed(1)}%';
+  bool get isHighConfidence   => confidence >= 0.50;
+  bool get isMediumConfidence => confidence >= 0.30 && confidence < 0.50;
+  String get confidencePercent => '${(confidence * 100).toStringAsFixed(1)}%';
 
   Color get confidenceColor {
     if (isHighConfidence)   return const Color(0xFF00C853);
     if (isMediumConfidence) return const Color(0xFFFFAB00);
     return const Color(0xFFFF5252);
+  }
+
+  /// Returns the indices of the top-k predictions sorted by probability desc.
+  List<int> topKIndices(int k) {
+    final indices = List.generate(allProbabilities.length, (i) => i)
+      ..sort((a, b) => allProbabilities[b].compareTo(allProbabilities[a]));
+    return indices.take(k).toList();
   }
 }

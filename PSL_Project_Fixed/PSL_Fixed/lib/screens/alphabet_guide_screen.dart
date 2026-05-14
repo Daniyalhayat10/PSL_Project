@@ -11,49 +11,49 @@ class _AlphabetGuideScreenState extends State<AlphabetGuideScreen>
   int? _selected;
   late TabController _tab;
 
-  // Signs ordered exactly as in the dataset image
+  // Signs matching the PSL dataset reference image (Urdu alphabet order)
   static const List<Map<String, dynamic>> _signs = [
-    // Row 1 from dataset
-    {'u':'ا','r':'Alif',   'g':'Open hand, all fingers straight up, palm forward','f':'11111','c':[0xFF667EEA,0xFF764BA2]},
-    {'u':'ب','r':'Bay',    'g':'Flat hand held horizontally, thumb tucked under fingers','f':'01111','c':[0xFFFF6B6B,0xFFEE5A24]},
-    {'u':'پ','r':'Pay',    'g':'Flat hand, three fingers extended, wrist bent down','f':'01110','c':[0xFF26de81,0xFF20bf6b]},
-    {'u':'ت','r':'Tay',    'g':'Two fingers (index+middle) pointing up, others closed','f':'01100','c':[0xFFfd9644,0xFFe55039]},
-    {'u':'ٹ','r':'Taay',   'g':'Closed fist with thumb on side pointing up','f':'10000','c':[0xFFa55eea,0xFF8854d0]},
-    {'u':'ث','r':'Say',    'g':'Three fingers (index+middle+ring) spread upward','f':'01110','c':[0xFF2bcbba,0xFF0fb9b1]},
-    {'u':'ج','r':'Jeem',   'g':'Index+middle fingers hooked/curved forward','f':'01100','c':[0xFFFC427A,0xFFfd79a8]},
-    {'u':'چ','r':'Chay',   'g':'Index finger curved like a C, others closed','f':'01000','c':[0xFF4b7bec,0xFF3867d6]},
-    {'u':'ح','r':'Hay',    'g':'Open palm facing outward, all fingers together','f':'11111','c':[0xFF20bf6b,0xFF0be881]},
-    {'u':'خ','r':'Khay',   'g':'Open palm facing inward, fingers spread wide','f':'11111','c':[0xFFf7b731,0xFFfed330]},
-    // Row 2 from dataset
-    {'u':'د','r':'Daal',   'g':'Index finger pointing sideways/left, fist closed','f':'01000','c':[0xFFfc5c65,0xFFeb3b5a]},
-    {'u':'ڈ','r':'Dal Drwaza','g':'Thumb and index form D-shape, others closed','f':'11000','c':[0xFF2d98da,0xFF0a3d62]},
-    {'u':'ذ','r':'Zaal',   'g':'Closed fist, index finger pointing forward-down','f':'01000','c':[0xFFe55039,0xFFc0392b]},
-    {'u':'ر','r':'Ray',    'g':'Index finger hooked/bent pointing down-right','f':'01000','c':[0xFF8e44ad,0xFF6c3483]},
-    {'u':'ڑ','r':'Rdy',    'g':'Index+middle bent/hooked together downward','f':'01100','c':[0xFF16a085,0xFF1abc9c]},
-    {'u':'ز','r':'Zay',    'g':'Index finger straight up, thumb out (pistol shape)','f':'11000','c':[0xFF2980b9,0xFF3498db]},
-    {'u':'س','r':'Say2',   'g':'Three fingers (index+middle+ring) pointing sideways','f':'01110','c':[0xFFd35400,0xFFe67e22]},
-    {'u':'ش','r':'Sheen',  'g':'Three fingers spread wide and waving/fanned out','f':'01110','c':[0xFF27ae60,0xFF2ecc71]},
-    {'u':'ص','r':'Suaad',  'g':'Thumb crosses palm, index pointing, others curled','f':'11000','c':[0xFFc0392b,0xFFe74c3c]},
-    // Row 3 from dataset
-    {'u':'ض','r':'Duaad',  'g':'Thumb+pinky extended, middle fingers closed (horns)','f':'10001','c':[0xFF8e44ad,0xFF9b59b6]},
-    {'u':'ط','r':'Tua',    'g':'Closed fist facing forward (all fingers curled)','f':'00000','c':[0xFF2c3e50,0xFF34495e]},
-    {'u':'ظ','r':'Zua',    'g':'Fist with wrist bent, back of hand forward','f':'00000','c':[0xFF16a085,0xFF1abc9c]},
-    {'u':'ع','r':'Ain',    'g':'Index+middle+ring fingers crossed/overlapping','f':'01110','c':[0xFFe74c3c,0xFFc0392b]},
-    {'u':'غ','r':'Gaaf',   'g':'Index finger bent, pointing sideways with knuckle','f':'01000','c':[0xFF2980b9,0xFF1a5276]},
-    {'u':'ف','r':'Fay',    'g':'All five fingers pinched at tips (beak/bunch)','f':'11111','c':[0xFFf39c12,0xFFd35400]},
-    {'u':'ق','r':'Qaaf',   'g':'V-sign (index+middle up), thumb touches ring','f':'01100','c':[0xFF6c3483,0xFF8e44ad]},
-    {'u':'ک','r':'Kaaf',   'g':'Index bent like hook/L pointing sideways','f':'01000','c':[0xFF1a5276,0xFF2980b9]},
-    {'u':'گ','r':'Gaaf2',  'g':'Index+thumb extended (L-shape), others closed','f':'11000','c':[0xFF117a65,0xFF16a085]},
-    {'u':'ل','r':'Laam',   'g':'L-shape: index up, thumb out to the side','f':'11000','c':[0xFF922b21,0xFFc0392b]},
-    // Row 4 from dataset
-    {'u':'م','r':'Meem',   'g':'Closed fist, thumb tucked under curled fingers','f':'00000','c':[0xFF1f618d,0xFF2e86c1]},
-    {'u':'ن','r':'Noon',   'g':'Index finger pointing forward/slightly curved','f':'01000','c':[0xFF196f3d,0xFF27ae60]},
-    {'u':'و','r':'Wow',    'g':'Closed fist, thumb pointing to the side','f':'10000','c':[0xFF7d6608,0xFFf39c12]},
-    {'u':'ہ','r':'Hay2',   'g':'Open palm facing upward, all fingers relaxed','f':'11111','c':[0xFF4a235a,0xFF7d3c98]},
-    {'u':'ع','r':'Ain2',   'g':'Index finger pointing up with slight forward tilt','f':'01000','c':[0xFF154360,0xFF1f618d]},
-    {'u':'ی','r':'Yaay',   'g':'Pinky finger raised straight, all others closed','f':'00001','c':[0xFF0e6655,0xFF17a589]},
-    {'u':'ے','r':'Bari Yay','g':'Index+pinky raised (rock-sign), others closed','f':'01001','c':[0xFF6e2f1a,0xFFca6f1e]},
-    {'u':'أ','r':'Alif Hamza','g':'Open hand tilted with thumb raised slightly','f':'11111','c':[0xFF512e5f,0xFF8e44ad]},
+    // Row 1
+    {'u':'ا','r':'Alif',      'g':'Index finger pointing straight up, fist closed around others','f':'01000','c':[0xFF667EEA,0xFF764BA2]},
+    {'u':'ب','r':'Bay',       'g':'Four fingers extended flat and horizontal, thumb tucked under','f':'01111','c':[0xFFFF6B6B,0xFFEE5A24]},
+    {'u':'پ','r':'Pay',       'g':'Flat hand with four fingers pointing forward, palm down','f':'01111','c':[0xFF26de81,0xFF20bf6b]},
+    {'u':'ت','r':'Tay',       'g':'Index + middle fingers pointing up (V/peace sign), others closed','f':'01100','c':[0xFFfd9644,0xFFe55039]},
+    {'u':'ٹ','r':'Taay',      'g':'Closed fist, all fingers curled tightly','f':'00000','c':[0xFFa55eea,0xFF8854d0]},
+    {'u':'ث','r':'Say',       'g':'Index + middle + ring fingers spread upward, pinky and thumb closed','f':'01110','c':[0xFF2bcbba,0xFF0fb9b1]},
+    {'u':'ج','r':'Jeem',      'g':'Index + middle fingers bent/hooked forward together','f':'01100','c':[0xFFFC427A,0xFFfd79a8]},
+    {'u':'چ','r':'Chay',      'g':'Index finger curved into C-shape, all other fingers closed','f':'01000','c':[0xFF4b7bec,0xFF3867d6]},
+    {'u':'ح','r':'Hay',       'g':'Open palm facing outward, all fingers together and extended','f':'11111','c':[0xFF20bf6b,0xFF0be881]},
+    {'u':'خ','r':'Khay',      'g':'Open hand with all fingers spread wide apart, palm forward','f':'11111','c':[0xFFf7b731,0xFFfed330]},
+    // Row 2
+    {'u':'د','r':'Daal',      'g':'Index finger pointing sideways (left), other fingers closed in fist','f':'01000','c':[0xFFfc5c65,0xFFeb3b5a]},
+    {'u':'ڈ','r':'Ddal',      'g':'Thumb and index form an L/D-shape, remaining fingers closed','f':'11000','c':[0xFF2d98da,0xFF0a3d62]},
+    {'u':'ذ','r':'Zaal',      'g':'Index finger pointing forward-down, fist closed','f':'01000','c':[0xFFe55039,0xFFc0392b]},
+    {'u':'ر','r':'Ray',       'g':'Index finger hooked/bent downward, other fingers curled','f':'01000','c':[0xFF8e44ad,0xFF6c3483]},
+    {'u':'ڑ','r':'Rra',       'g':'Index + middle fingers crossed or bent together downward','f':'01100','c':[0xFF16a085,0xFF1abc9c]},
+    {'u':'ز','r':'Zay',       'g':'Index finger up + thumb extended out (pistol/L shape)','f':'11000','c':[0xFF2980b9,0xFF3498db]},
+    {'u':'س','r':'Seen',      'g':'Index + middle + ring fingers pointing sideways, thumb and pinky closed','f':'01110','c':[0xFFd35400,0xFFe67e22]},
+    {'u':'ش','r':'Sheen',     'g':'Index + middle + ring fingers spread wide and fanned out upward','f':'01110','c':[0xFF27ae60,0xFF2ecc71]},
+    {'u':'ص','r':'Suaad',     'g':'Thumb extended to side, index slightly curved, other fingers curled','f':'11000','c':[0xFFc0392b,0xFFe74c3c]},
+    // Row 3
+    {'u':'ض','r':'Duaad',     'g':'Thumb + pinky extended outward (shaka/Y-shape), middle fingers closed','f':'10001','c':[0xFF8e44ad,0xFF9b59b6]},
+    {'u':'ط','r':'Tua',       'g':'All fingers curled into a tight fist, palm facing forward','f':'00000','c':[0xFF2c3e50,0xFF34495e]},
+    {'u':'ظ','r':'Zua',       'g':'Fist with wrist angled, back of hand facing forward','f':'00000','c':[0xFF16a085,0xFF1abc9c]},
+    {'u':'ع','r':'Ain',       'g':'Index + middle + ring fingers overlapping or crossing each other','f':'01110','c':[0xFFe74c3c,0xFFc0392b]},
+    {'u':'غ','r':'Ghain',     'g':'Index finger bent at knuckle and pointing sideways, others closed','f':'01000','c':[0xFF2980b9,0xFF1a5276]},
+    {'u':'ف','r':'Fay',       'g':'All five fingertips pinched together (beak shape), pointing forward','f':'11111','c':[0xFFf39c12,0xFFd35400]},
+    {'u':'ق','r':'Qaaf',      'g':'Index + middle up (V-sign), thumb touches ring finger','f':'01100','c':[0xFF6c3483,0xFF8e44ad]},
+    {'u':'ک','r':'Kaaf',      'g':'Index finger bent into a hook/hook shape, pointing sideways','f':'01000','c':[0xFF1a5276,0xFF2980b9]},
+    {'u':'گ','r':'Gaaf',      'g':'Index + thumb form an L-shape (gun), other fingers closed','f':'11000','c':[0xFF117a65,0xFF16a085]},
+    {'u':'ل','r':'Laam',      'g':'Index pointing straight up + thumb extended out to side (L-shape)','f':'11000','c':[0xFF922b21,0xFFc0392b]},
+    // Row 4
+    {'u':'م','r':'Meem',      'g':'Closed fist with thumb tucked beneath all curled fingers','f':'00000','c':[0xFF1f618d,0xFF2e86c1]},
+    {'u':'ن','r':'Noon',      'g':'Index finger pointing forward/slightly curved, others curled','f':'01000','c':[0xFF196f3d,0xFF27ae60]},
+    {'u':'و','r':'Wow',       'g':'Closed fist with thumb pointing out to the side','f':'10000','c':[0xFF7d6608,0xFFf39c12]},
+    {'u':'ہ','r':'Hay2',      'g':'Open palm facing upward, all five fingers relaxed and spread','f':'11111','c':[0xFF4a235a,0xFF7d3c98]},
+    {'u':'ع','r':'Ain2',      'g':'Index finger pointing slightly forward and up, others curled','f':'01000','c':[0xFF154360,0xFF1f618d]},
+    {'u':'ی','r':'Choti Yay', 'g':'Pinky finger raised straight up, all other fingers closed','f':'00001','c':[0xFF0e6655,0xFF17a589]},
+    {'u':'ے','r':'Bari Yay',  'g':'Index + pinky raised (rock sign / ILY), middle fingers closed','f':'01001','c':[0xFF6e2f1a,0xFFca6f1e]},
+    {'u':'أ','r':'Alif Hamza','g':'Open hand with all fingers extended, thumb slightly raised','f':'11111','c':[0xFF512e5f,0xFF8e44ad]},
   ];
 
   List<Map<String,dynamic>> get _filtered => _search.isEmpty ? _signs
@@ -243,7 +243,7 @@ class _AlphabetGuideScreenState extends State<AlphabetGuideScreen>
                   const Text('Tap to see gesture details',
                       style: TextStyle(color: Colors.white30, fontSize: 10)),
               ])),
-          )),
+          ),
         ]),
       ),
     );
@@ -376,7 +376,8 @@ class _Hand3DPainter extends CustomPainter {
         // Thumb — angled
         final tPath = Path();
         if (extended) {
-          tPath.moveTo(fx + 2, palmTop + 4)
+          tPath
+            ..moveTo(fx + 2, palmTop + 4)
             ..quadraticBezierTo(fx - fw*1.2, palmTop - fh*0.4,
                 fx - fw*0.8, fy)
             ..quadraticBezierTo(fx + fw*0.5, fy - fw*0.2,
@@ -384,7 +385,8 @@ class _Hand3DPainter extends CustomPainter {
             ..lineTo(fx + 4, palmTop + 4)
             ..close();
         } else {
-          tPath.moveTo(fx - 2, palmTop + 2)
+          tPath
+            ..moveTo(fx - 2, palmTop + 2)
             ..quadraticBezierTo(fx - fw*0.8, palmTop - fh*0.4,
                 fx - fw*0.4, fy)
             ..quadraticBezierTo(fx + fw*0.3, fy + fh*0.2,

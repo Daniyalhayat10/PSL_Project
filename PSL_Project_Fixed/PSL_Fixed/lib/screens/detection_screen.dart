@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
+import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -22,17 +22,10 @@ class _DetectionScreenState extends State<DetectionScreen>
   List<CameraDescription> _cameras = [];
   int _camIdx = 1;
   bool _hasPermission = false;
-<<<<<<< Updated upstream
-  bool _streamActive  = false;
-  bool _busy          = false;
-  int  _frameCount    = 0;
-  static const int _skip = 5;
-=======
   bool _streamActive = false;
   bool _busy = false;
   int _frameCount = 0;
   static const int _skip = 10;
->>>>>>> Stashed changes
 
   // TTS
   FlutterTts? _tts;
@@ -150,51 +143,26 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   Future<void> _process(CameraImage raw) async {
     try {
-<<<<<<< Updated upstream
-      final frame = _toImg(raw);
-      if (frame == null) return;
-      setState(() => _processed++);
-=======
->>>>>>> Stashed changes
       final model = context.read<ModelService>();
       if (!model.isLoaded) return;
 
-      DetectionResult? result;
-      if (Platform.isAndroid) {
-        // Pass raw YUV planes straight to the native MediaPipe landmarker —
-        // no Dart-side pixel conversion needed.
-        result = await model.processYuv(
-          width:          raw.width,
-          height:         raw.height,
-          yPlane:         Uint8List.fromList(raw.planes[0].bytes),
-          uPlane:         Uint8List.fromList(raw.planes[1].bytes),
-          vPlane:         Uint8List.fromList(raw.planes[2].bytes),
-          yStride:        raw.planes[0].bytesPerRow,
-          uvStride:       raw.planes[1].bytesPerRow,
-          uvPixelStride:  raw.planes[1].bytesPerPixel!,
-        );
-      }
+      // Convert camera frame to img.Image (matches training pipeline exactly)
+      final frame = _toImg(raw);
+      if (frame == null) return;
+
+      // Run the full TFLite pipeline: palm detect → crop → landmark → classify
+      final result = model.processFrame(frame);
 
       if (!mounted) return;
       setState(() => _processed++);
 
-      // Only surface confident detections (≥ 30 %)
-      final validResult = (result != null && result.confidence >= 0.30)
+      // Surface any detection with confidence ≥ 15 % so the UI shows live feedback
+      final validResult = (result != null && result.confidence >= 0.15)
           ? result : null;
 
       if (validResult != null) {
         context.read<DetectionProvider>().updateDetection(validResult);
         if (!_handFound) _letterCtrl.forward(from: 0);
-<<<<<<< Updated upstream
-        setState(() { _handFound = true; _status = result.romanLabel; });
-        if (_ttsOn && result.isHighConfidence &&
-            result.romanLabel != _lastSpoken) {
-          _lastSpoken = result.romanLabel;
-          _tts?.speak(result.urduLabel);
-        }
-      } else {
-        setState(() { _handFound = false; _status = 'Place your hand in the frame'; });
-=======
         setState(() {
           _handFound = true;
           _status = '${validResult.romanLabel}  ${validResult.confidencePercent}';
@@ -211,13 +179,11 @@ class _DetectionScreenState extends State<DetectionScreen>
           _handFound = false;
           _status = 'ہاتھ باکس میں رکھیں';
         });
->>>>>>> Stashed changes
       }
     } catch (e) { debugPrint('❌ process: $e'); }
     finally { _busy = false; }
   }
 
-<<<<<<< Updated upstream
   img.Image? _toImg(CameraImage c) {
     try { return Platform.isAndroid ? _yuv(c) : _bgra(c); }
     catch (_) { return null; }
@@ -225,28 +191,26 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   img.Image _yuv(CameraImage c) {
     final out = img.Image(width: c.width, height: c.height);
-    final yp=c.planes[0]; final up=c.planes[1]; final vp=c.planes[2];
-    for (int y=0;y<c.height;y++) {
-      for (int x=0;x<c.width;x++) {
-        final yi=y*yp.bytesPerRow+x;
-        final ui=(y~/2)*up.bytesPerRow+(x~/2)*up.bytesPerPixel!;
-        final yv=yp.bytes[yi]; final u=up.bytes[ui]; final v=vp.bytes[ui];
-        out.setPixelRgb(x,y,
-          (yv+1.402*(v-128)).round().clamp(0,255),
-          (yv-0.344136*(u-128)-0.714136*(v-128)).round().clamp(0,255),
-          (yv+1.772*(u-128)).round().clamp(0,255));
+    final yp = c.planes[0]; final up = c.planes[1]; final vp = c.planes[2];
+    for (int y = 0; y < c.height; y++) {
+      for (int x = 0; x < c.width; x++) {
+        final yi = y * yp.bytesPerRow + x;
+        final ui = (y ~/ 2) * up.bytesPerRow + (x ~/ 2) * up.bytesPerPixel!;
+        final yv = yp.bytes[yi]; final u = up.bytes[ui]; final v = vp.bytes[ui];
+        out.setPixelRgb(x, y,
+          (yv + 1.402   * (v - 128)).round().clamp(0, 255),
+          (yv - 0.34414 * (u - 128) - 0.71414 * (v - 128)).round().clamp(0, 255),
+          (yv + 1.772   * (u - 128)).round().clamp(0, 255));
       }
     }
     return out;
   }
 
   img.Image _bgra(CameraImage c) => img.Image.fromBytes(
-      width:c.width, height:c.height,
-      bytes:c.planes[0].bytes.buffer,
-      format:img.Format.uint8, order:img.ChannelOrder.bgra);
+      width: c.width, height: c.height,
+      bytes: c.planes[0].bytes.buffer,
+      format: img.Format.uint8, order: img.ChannelOrder.bgra);
 
-=======
->>>>>>> Stashed changes
   Future<void> _switchCam() async {
     if (_cameras.length < 2) return;
     _camIdx = (_camIdx+1)%_cameras.length;
@@ -255,10 +219,6 @@ class _DetectionScreenState extends State<DetectionScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState s) {
-<<<<<<< Updated upstream
-    if (s==AppLifecycleState.inactive) _stopStream();
-    else if (s==AppLifecycleState.resumed && _cameras.isNotEmpty) _startCamera(_camIdx);
-=======
     if (s == AppLifecycleState.inactive || s == AppLifecycleState.paused) {
       _stopStream();
     } else if (s == AppLifecycleState.resumed && _cameras.isNotEmpty) {
@@ -267,7 +227,6 @@ class _DetectionScreenState extends State<DetectionScreen>
         if (mounted) _startCamera(_camIdx);
       });
     }
->>>>>>> Stashed changes
   }
 
   @override
@@ -458,20 +417,6 @@ class _DetectionScreenState extends State<DetectionScreen>
               width: 36, height: 4,
               decoration: BoxDecoration(color: Colors.white24,
                   borderRadius: BorderRadius.circular(2))),
-<<<<<<< Updated upstream
-=======
-          const SizedBox(height: 12),
-          // Current detection
-          if (p.lastResult != null) _buildDetectionCard(p.lastResult!),
-          const SizedBox(height: 12),
-          // Word/Sentence display
-          _buildTextDisplay(p),
-          const SizedBox(height: 12),
-          // Actions
-          _buildActions(p),
-          const SizedBox(height: 8),
-          _buildPauseButton(p),
->>>>>>> Stashed changes
           const SizedBox(height: 16),
           // Current detection
           if (p.lastResult != null) ...[
@@ -484,6 +429,8 @@ class _DetectionScreenState extends State<DetectionScreen>
           const SizedBox(height: 14),
           // Action buttons
           _buildActionRow(p),
+          const SizedBox(height: 8),
+          _buildPauseButton(p),
           const SizedBox(height: 18),
         ]),
       ),
@@ -510,7 +457,6 @@ class _DetectionScreenState extends State<DetectionScreen>
             child: Center(child: Text(r.urduLabel,
                 style: const TextStyle(fontFamily: 'JameelNooriNastaleeq',
                     color: Colors.white, fontSize: 40),
-<<<<<<< Updated upstream
                 textDirection: TextDirection.rtl)))),
         const SizedBox(width: 16),
         // Info
@@ -539,62 +485,15 @@ class _DetectionScreenState extends State<DetectionScreen>
                   style: TextStyle(color: r.confidenceColor, fontSize: 11)),
             ]),
           ])),
-        // Top 3 quick list
+        // Top 3 predictions by probability (not just first 3 classes)
         Column(children: [
-          for (int i = 0; i < 3 && i < r.allProbabilities.length; i++) ...[
-            if (i > 0) const SizedBox(height: 4),
+          for (final idx in r.topKIndices(3)) ...[
+            if (idx != r.topKIndices(3).first) const SizedBox(height: 4),
             _MiniLabel(
-                label: i < ModelService.romanLabels.length
-                    ? ModelService.romanLabels[i] : '?',
-                pct: (r.allProbabilities[i] * 100).toStringAsFixed(0)),
+                label: idx < ModelService.romanLabels.length
+                    ? ModelService.romanLabels[idx] : '?',
+                pct: (r.allProbabilities[idx] * 100).toStringAsFixed(0)),
           ],
-=======
-                textDirection: TextDirection.rtl)),
-          ),
-          const SizedBox(width: 14),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(r.romanLabel,
-                  style: const TextStyle(fontSize: 18,
-                      fontWeight: FontWeight.bold, color: Color(0xFF1A1A2E))),
-              const SizedBox(height: 4),
-              Row(children: [
-                Expanded(child: ClipRRect(
-                  borderRadius: BorderRadius.circular(6),
-                  child: LinearProgressIndicator(
-                      value: r.confidence,
-                      backgroundColor: Colors.grey[200],
-                      color: r.confidenceColor, minHeight: 8),
-                )),
-                const SizedBox(width: 8),
-                Text(r.confidencePercent,
-                    style: TextStyle(color: r.confidenceColor,
-                        fontWeight: FontWeight.bold, fontSize: 13)),
-              ]),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 3),
-                decoration: BoxDecoration(
-                    color: r.isHighConfidence
-                        ? const Color(0xFF00C853).withOpacity(0.1)
-                        : r.isMediumConfidence
-                            ? const Color(0xFFFFD600).withOpacity(0.1)
-                            : const Color(0xFFFF5252).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10)),
-                child: Text(
-                    r.isHighConfidence
-                        ? '✓ High Confidence'
-                        : r.isMediumConfidence ? '~ Medium' : '~ Low',
-                    style: TextStyle(fontSize: 11,
-                        color: r.isHighConfidence
-                            ? const Color(0xFF00C853)
-                            : r.isMediumConfidence
-                                ? const Color(0xFFF9A825)
-                                : const Color(0xFFFF5252),
-                        fontWeight: FontWeight.w600)),
-              ),
-            ])),
->>>>>>> Stashed changes
         ]),
       ]));
   }
@@ -674,6 +573,7 @@ class _DetectionScreenState extends State<DetectionScreen>
             }),
       ]));
   }
+
   Widget _buildPauseButton(DetectionProvider p) {
     final paused = p.detectionPaused;
     final color = paused ? const Color(0xFF00C853) : const Color(0xFFFF9800);
